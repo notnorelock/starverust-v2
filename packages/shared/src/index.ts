@@ -40,6 +40,9 @@ export {
 export type { EasingFunction } from './math/Easing';
 export type { WorldBounds } from './math/WorldBounds';
 
+// Physics
+export * from './physics';
+
 // Time
 export { FixedTimestepLoop } from './time/FixedTimestepLoop';
 export type { FixedTimestepLoopOptions, TickCallback } from './time/FixedTimestepLoop';

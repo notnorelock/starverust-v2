@@ -146,6 +146,76 @@ If you add a system, packet, or client feature that needs the world size, thread
 `WorldBounds`/`WorldConfig` through as a parameter the same way — don't reintroduce a
 shared constant, since that's exactly what this design replaced.
 
+### Physics & collision engine (`shared/src/physics`, `shared/src/ecs/systems/{PhysicsSystem,CollisionSystem}.ts`)
+
+Hand-rolled, no external physics/collision library — `shared/src/physics` is pure
+computation (shapes, narrowphase math, spatial hashing, resolution, knockback, CCD
+sub-stepping), completely independent of ECS or rendering; the two systems are the only
+things that wire it into components. Server-authoritative only — the client never runs
+either system, it just renders whatever position the server reports.
+
+**Component split**: `VelocityComponent` (already existed) holds current vx/vy.
+`PhysicsBodyComponent` (new) holds the *forces acting on* velocity — pending acceleration
+(`ax`/`ay`, applied then zeroed each tick), `mass`, `friction`, `drag`, and `bodyType`
+(`'dynamic'` | `'static'`). `CircleColliderComponent`/`RectColliderComponent` hold pure
+shape data (radius, or half-width/half-height), centered on the entity's
+`PositionComponent` — there's no separate collider-offset/transform concept, colliders
+are always centered on the entity. An entity needs `PositionComponent` +
+`PhysicsBodyComponent` to participate in `PhysicsSystem`, and `PositionComponent` + either
+collider component to participate in `CollisionSystem`'s broadphase — the two systems'
+entity sets overlap but aren't identical (e.g. a collider-only static wall has no
+`VelocityComponent` to integrate).
+
+**`PhysicsBodyComponent`'s constructor requires `initialX`/`initialY` for any entity not
+spawning at the origin.** These seed `prevX`/`prevY` (the position at the start of the
+entity's first tick). Omitting them for an off-origin spawn makes `CollisionSystem`'s
+continuous-collision pass see a false "huge displacement" from `(0,0)` to the real spawn
+point on the very first tick and try to sweep the entity across the map — this exact bug
+was caught and fixed during implementation (see `PlayerEntityFactory`'s
+`initialX: spawnX, initialY: spawnY` for the pattern to follow). After the first tick,
+`PhysicsSystem` keeps `prevX`/`prevY` current automatically.
+
+**Pipeline order**: `PhysicsSystem` is registered BEFORE `MovementSystem` in
+`TickPipeline.ts`, despite the conceptual step numbers (2. Movement, 3. Physics) —
+`PhysicsSystem` must record `prevX`/`prevY` and turn acceleration into velocity before
+`MovementSystem` integrates that velocity into position; the reverse order would make
+`prevX`/`prevY` already reflect the current tick's movement, breaking CCD's displacement
+check. `CollisionSystem` runs after both, then `WorldBoundsSystem` runs last as a final
+world-edge catch-all clamp.
+
+**Narrowphase normal direction contract** (`shared/src/physics/Narrowphase.ts` /
+`Manifold.ts`): every `test*` function returns a manifold whose `normal` points from the
+FIRST shape argument (A) toward the SECOND (B). This sounds obvious but is easy to get
+backward in `testCircleRect`'s "circle center deep inside the rect" branch specifically
+(the zero-distance case) — the intuitive "push the circle out this way" direction is
+B→A, the *opposite* of what this function must return. If you touch narrowphase code,
+add a test asserting the normal's direction against a scenario where A and B are offset
+along a known axis, not just that a manifold exists — a sign-flip bug here silently
+inverts collision resolution direction while still "detecting" every collision correctly.
+
+**Continuous collision (CCD) is conservative sub-stepping, not full swept-shape math**
+(`shared/src/physics/ContinuousCollision.ts`): if a tick's displacement exceeds half a
+dynamic entity's own collider radius, `CollisionSystem` walks it from its pre-movement
+position to its post-movement position in several smaller steps, testing narrowphase
+against every other collider at each step and stopping (zeroing velocity) at the first
+step that overlaps something. This is deliberately cheaper than a true swept-circle
+solver and sufficient at this game's speed/scale — it reuses the same narrowphase
+functions rather than needing separate swept-shape geometry.
+
+**Broadphase** (`shared/src/physics/SpatialHashGrid.ts`) is a reusable-across-ticks
+uniform grid — `clear()` empties existing bucket arrays in place (`.length = 0`, not a
+new `Map`) so `CollisionSystem` doesn't allocate a fresh grid every tick.
+`CollisionSystem` owns the pair-deduplication `Set` (entities spanning multiple shared
+cells would otherwise be visited more than once) for the same reason — the grid itself
+doesn't dedupe, since hashing an unordered id pair cheaply would need an allocation the
+grid's own hot loop shouldn't pay for.
+
+`applyKnockback()` (`shared/src/physics/Knockback.ts`) is a shared primitive — an
+instantaneous velocity impulse away from a source point — used by nothing yet in Stage 1,
+but deliberately factored out so a future `CombatSystem` (hit knockback) and
+`CollisionSystem` (impact-response knockback, not yet wired in) share one implementation
+instead of each reimplementing "normalize direction, scale by force."
+
 ### Camera easing (`client/src/camera/Camera2D.ts`)
 
 Follows the locally-controlled entity using `Ease2D`/`easeOutQuad` over a fixed 0.4s
@@ -162,15 +232,18 @@ and the generic `Ease`/`Ease2D` tween classes are reusable for any future eased 
 ### Server tick pipeline (`packages/server/src/core/TickPipeline.ts`)
 
 Maps to a 12-step conceptual pipeline (Input → Movement → Physics → Collision → AI →
-Combat → Crafting → Inventory → Projectiles → Environment → Networking → Snapshot), of
-which 5 steps are currently implemented: `InputApplicationSystem` → shared
-`MovementSystem` → shared `WorldBoundsSystem` (Collision slot) → `SnapshotBroadcastSystem`
-(folds Networking+Snapshot together). The other 7 steps are documented, ordered insertion
-points in that file's comments, not
-placeholder no-op systems — adding a later-stage system (e.g. `PhysicsSystem`) is one
-`registerSystem()` call inserted at the matching position, not a restructure of `World`
-or this function. `World.fixedUpdate()`'s system-array iteration order *is* the
-pipeline; there's no separate pipeline data structure.
+Combat → Crafting → Inventory → Projectiles → Environment → Networking → Snapshot).
+Actual registration order in `buildTickPipeline()`: `InputApplicationSystem` →
+`PhysicsSystem` → `MovementSystem` → `CollisionSystem` → `WorldBoundsSystem` →
+`SnapshotBroadcastSystem` — note `PhysicsSystem` runs before `MovementSystem` despite the
+conceptual step numbers (see the "Physics & collision engine" section above for why; the
+registration-order comment in `TickPipeline.ts` explains it inline too). The remaining
+unimplemented steps (AI, Combat, Crafting, Inventory, Projectiles, Environment) are
+documented, ordered insertion points in that file's comments, not placeholder no-op
+systems — adding a later-stage system is one `registerSystem()` call inserted at the
+matching position, not a restructure of `World` or this function.
+`World.fixedUpdate()`'s system-array iteration order *is* the pipeline; there's no
+separate pipeline data structure.
 
 The tick loop itself (`shared/src/time/FixedTimestepLoop.ts`) uses an accumulator with
 an injectable clock/scheduler specifically so it's unit-testable without real timers.
