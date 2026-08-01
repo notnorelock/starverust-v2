@@ -1,0 +1,16 @@
+{
+  "name": "@starve/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "db:migrate": "bun run src/database/migrate.ts"
+  },
+  "dependencies": {
+    "@starve/protocol": "workspace:*",
+    "@starve/shared": "workspace:*",
+    "kysely": "^0.27.5"
+  }
+}

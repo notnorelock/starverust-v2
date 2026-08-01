@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+
+# Bun
+bun.lock.bak
+
+# Data
+packages/server/data/*.sqlite
+packages/server/data/*.sqlite-journal
+packages/server/data/*.sqlite-wal
+packages/server/data/*.sqlite-shm
+
+# Env
+.env
+.env.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Coverage
+coverage/

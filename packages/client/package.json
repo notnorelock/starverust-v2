@@ -1,0 +1,14 @@
+{
+  "name": "@starve/client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "webpack serve --config ../../configs/webpack/dev.config.js",
+    "build": "webpack --config ../../configs/webpack/prod.config.js"
+  },
+  "dependencies": {
+    "@starve/protocol": "workspace:*",
+    "@starve/shared": "workspace:*"
+  }
+}
