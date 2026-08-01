@@ -13,3 +13,5 @@ export { separate, slideAlongNormal, inverseMass } from './Resolution';
 export { applyKnockback } from './Knockback';
 
 export { computeSubstepCount } from './ContinuousCollision';
+
+export { CollisionLayer, ALL_LAYERS, layersCollide } from './CollisionLayer';

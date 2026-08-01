@@ -18,6 +18,7 @@ import {
   computeSubstepCount,
   circle,
   rect,
+  layersCollide,
   type CollisionManifold,
 } from '../../physics';
 
@@ -208,7 +209,30 @@ export class CollisionSystem extends System {
     ];
   }
 
+  /** Layer/mask for whichever collider component (circle or rect) an entity has. */
+  private layerMaskFor(world: World, entityId: EntityId): { layer: number; collidesWith: number } | undefined {
+    const circleCollider = world.entities.getComponent(entityId, CircleColliderComponent);
+    if (circleCollider) {
+      return { layer: circleCollider.layer, collidesWith: circleCollider.collidesWith };
+    }
+    const rectCollider = world.entities.getComponent(entityId, RectColliderComponent);
+    if (rectCollider) {
+      return { layer: rectCollider.layer, collidesWith: rectCollider.collidesWith };
+    }
+    return undefined;
+  }
+
   private testNarrowphase(world: World, a: EntityId, b: EntityId): CollisionManifold | null {
+    const layerMaskA = this.layerMaskFor(world, a);
+    const layerMaskB = this.layerMaskFor(world, b);
+    if (
+      layerMaskA &&
+      layerMaskB &&
+      !layersCollide(layerMaskA.layer, layerMaskA.collidesWith, layerMaskB.layer, layerMaskB.collidesWith)
+    ) {
+      return null;
+    }
+
     const posA = world.entities.getComponent(a, PositionComponent)!;
     const posB = world.entities.getComponent(b, PositionComponent)!;
     const circleA = world.entities.getComponent(a, CircleColliderComponent);

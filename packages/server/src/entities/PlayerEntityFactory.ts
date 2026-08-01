@@ -3,6 +3,7 @@ import {
   VelocityComponent,
   PhysicsBodyComponent,
   CircleColliderComponent,
+  CollisionLayer,
   World,
   type EntityId,
 } from '@starve/shared';
@@ -23,7 +24,10 @@ export function createPlayerEntity(world: World, spawnX: number, spawnY: number)
   world.entities.addComponent(
     entity.id,
     CircleColliderComponent,
-    new CircleColliderComponent(entity.id, PLAYER_COLLIDER_RADIUS),
+    new CircleColliderComponent(entity.id, PLAYER_COLLIDER_RADIUS, {
+      layer: CollisionLayer.Player,
+      collidesWith: CollisionLayer.World,
+    }),
   );
   return entity.id;
 }

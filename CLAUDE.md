@@ -210,6 +210,26 @@ cells would otherwise be visited more than once) for the same reason — the gri
 doesn't dedupe, since hashing an unordered id pair cheaply would need an allocation the
 grid's own hot loop shouldn't pay for.
 
+**Collision layers/masks** (`shared/src/physics/CollisionLayer.ts`) gate which collider
+pairs are even narrowphase-tested, using the standard Unity/Box2D "layer + mask" pattern:
+each collider belongs to exactly one bit-flag `layer` (`CollisionLayer.World`,
+`CollisionLayer.Player`, ...) and declares a `collidesWith` bitmask of layers it should be
+tested against. `layersCollide(layerA, maskA, layerB, maskB)` is a **symmetric** check —
+`(maskA & layerB) !== 0 && (maskB & layerA) !== 0` — both sides' masks must include the
+other's layer, not just one direction; this is what lets players share a
+`collidesWith: World` mask (excluding `Player`) so they pass through each other while both
+still collide with static world geometry, without `CollisionSystem` special-casing "is
+this pair both players" anywhere. `CircleColliderComponent`/`RectColliderComponent`
+default to `layer: World, collidesWith: ALL_LAYERS` (collide with everything) so existing
+callers that don't pass layer options keep today's behavior unchanged.
+`CollisionSystem.testNarrowphase()` is the single choke point that checks
+`layersCollide()` before doing any shape math and returns `null` (no collision) when the
+layers don't mutually match — since both the discrete resolution pass (`resolvePair`) and
+the CCD sub-stepping pass (`sweepEntity`) call `testNarrowphase()`, gating it there is
+sufficient to cover both without duplicating the check. Add new layers to the
+`CollisionLayer` enum (next free bit) rather than introducing an ad-hoc flag on the
+collider components.
+
 `applyKnockback()` (`shared/src/physics/Knockback.ts`) is a shared primitive — an
 instantaneous velocity impulse away from a source point — used by nothing yet in Stage 1,
 but deliberately factored out so a future `CombatSystem` (hit knockback) and
