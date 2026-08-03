@@ -1,4 +1,4 @@
-import type { WorldSnapshotPacket, EntitySnapshot } from '@starve/protocol';
+import type { WorldSnapshotPacket, EntityUpdatePacket } from '@starve/protocol';
 import { PLAYER_MOVE_SPEED, CLIENT_POSITION_SNAP_DISTANCE } from '@starve/shared';
 
 /**
@@ -48,20 +48,45 @@ export interface InterpolatedEntity {
  *
  * Isolated from RenderSystem/NetworkClient so a future client-prediction stage can extend
  * or replace the smoothing strategy without touching rendering or transport code.
+ *
+ * Two distinct inputs feed this, matching the split on the wire: seed() consumes the
+ * one-time, full-world WorldSnapshotPacket sent right after connecting (see PlayerSession)
+ * to initialize render state for everything that exists at that moment; push() consumes
+ * the recurring, per-connection EntityUpdatePacket (see InterestManagementSystem), which
+ * only ever contains entities currently within interest range — critically, an entity's
+ * *absence* from one push() no longer means it was destroyed (unlike the old
+ * WorldSnapshotPacket-every-tick model), since it may simply have left interest range this
+ * tick. Actual destruction is remove(), driven by EntityDestroyPacket.
  */
 export class SnapshotBuffer {
-  private latest: WorldSnapshotPacket | undefined;
+  private latestServerTick = 0;
   private readonly rendered = new Map<number, RenderedEntity>();
 
-  push(packet: WorldSnapshotPacket): void {
-    this.latest = packet;
+  /** One-time full-world catch-up — see the class doc comment for why this is distinct from push(). */
+  seed(packet: WorldSnapshotPacket): void {
+    for (const target of packet.entities) {
+      if (this.rendered.has(target.entityId)) {
+        continue; // Already known (e.g. arrived via an EntityUpdatePacket first) — don't stomp live state.
+      }
+      this.rendered.set(target.entityId, {
+        x: target.x,
+        y: target.y,
+        r: { x: target.x, y: target.y },
+        speed: target.speed,
+      });
+    }
+  }
+
+  /** Recurring, spatially-filtered per-tick update — see the class doc comment for why this never prunes. */
+  push(packet: EntityUpdatePacket): void {
+    this.latestServerTick = packet.serverTick;
 
     for (const target of packet.entities) {
       const render = this.rendered.get(target.entityId);
       if (!render) {
-        // First snapshot mentioning this entity — start exactly at it rather than
-        // gliding in from (0,0), mirroring the reference's Item constructor seeding
-        // `this.r = { x, y }` and `this.x = x` from the same initial values.
+        // First time this entity has come into interest range — start exactly at it
+        // rather than gliding in from (0,0), mirroring the reference's Item constructor
+        // seeding `this.r = { x, y }` and `this.x = x` from the same initial values.
         this.rendered.set(target.entityId, {
           x: target.x,
           y: target.y,
@@ -82,8 +107,6 @@ export class SnapshotBuffer {
         render.y = target.y;
       }
     }
-
-    pruneStaleEntities(this.rendered, packet.entities);
   }
 
   /**
@@ -93,10 +116,6 @@ export class SnapshotBuffer {
    * variable rate, so this must be measured per call rather than assumed constant).
    */
   sample(dt: number): InterpolatedEntity[] {
-    if (!this.latest) {
-      return [];
-    }
-
     const result: InterpolatedEntity[] = [];
 
     for (const [entityId, render] of this.rendered) {
@@ -108,22 +127,26 @@ export class SnapshotBuffer {
     return result;
   }
 
-  /**
-   * Debug helper: the raw position from the single latest received snapshot for one
-   * entity, with no smoothing applied — lets a caller compare "what the server most
-   * recently reported" against sample()'s smoothed render position, to visually gauge how
-   * far apart they drift.
-   */
-  latestRawPosition(entityId: number): InterpolatedEntity | undefined {
-    const entity = this.latest?.entities.find((e) => e.entityId === entityId);
-    return entity ? { entityId, x: entity.x, y: entity.y } : undefined;
+  /** The server tick the most recent EntityUpdatePacket was stamped with — for debug/UI display. */
+  get lastServerTick(): number {
+    return this.latestServerTick;
   }
 
   /**
-   * Drops an entity's render state immediately on EntityDestroyPacket, rather than waiting
-   * for it to fall out of the next WorldSnapshotPacket via pruneStaleEntities() — the two
-   * are redundant in the common case (both eventually agree the entity is gone) but this
-   * makes cleanup happen the instant the server says so instead of up to one tick later.
+   * Debug helper: the raw position from the most recent network update for one entity,
+   * with no smoothing applied — lets a caller compare "what the server most recently
+   * reported" against sample()'s smoothed render position, to visually gauge how far apart
+   * they drift.
+   */
+  latestRawPosition(entityId: number): InterpolatedEntity | undefined {
+    const render = this.rendered.get(entityId);
+    return render ? { entityId, x: render.r.x, y: render.r.y } : undefined;
+  }
+
+  /**
+   * Drops an entity's render state immediately on EntityDestroyPacket — the sole source of
+   * removal now that push() never prunes (see the class doc comment for why an
+   * EntityUpdatePacket's absence no longer implies destruction).
    */
   remove(entityId: number): void {
     this.rendered.delete(entityId);
@@ -145,14 +168,5 @@ function chaseTowards(render: RenderedEntity, step: number): void {
   } else {
     render.x += (dx / distance) * step;
     render.y += (dy / distance) * step;
-  }
-}
-
-function pruneStaleEntities(rendered: Map<number, RenderedEntity>, entities: readonly EntitySnapshot[]): void {
-  const seen = new Set(entities.map((e) => e.entityId));
-  for (const entityId of rendered.keys()) {
-    if (!seen.has(entityId)) {
-      rendered.delete(entityId);
-    }
   }
 }

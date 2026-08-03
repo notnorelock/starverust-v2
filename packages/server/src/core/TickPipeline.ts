@@ -7,8 +7,8 @@ import {
   type ServiceContainer,
 } from '@starve/shared';
 import { InputApplicationSystem } from '../systems/InputApplicationSystem';
-import { SnapshotBroadcastSystem } from '../systems/SnapshotBroadcastSystem';
-import { NETWORK_SERVICE, CONNECTION_REGISTRY } from './ServiceKeys';
+import { InterestManagementSystem } from '../systems/InterestManagementSystem';
+import { CONNECTION_REGISTRY } from './ServiceKeys';
 
 /**
  * Builds the ordered system list matching the game's 12-step authoritative tick pipeline.
@@ -49,11 +49,15 @@ export function buildTickPipeline(services: ServiceContainer): System[] {
     new CollisionSystem(),
     // Runs last, after the target position (PositionComponent) has been fully resolved
     // by collision against everything, including the boundary walls — eases
-    // RenderPositionComponent toward that final target every tick. SnapshotBroadcastSystem
-    // below broadcasts RenderPositionComponent, not the raw target, so clients see
-    // continuous motion even though MovementSystem only advances the target itself every
-    // MOVEMENT_TARGET_INTERVAL_TICKS ticks.
+    // RenderPositionComponent toward that final target every tick. InterestManagementSystem
+    // below sends RenderPositionComponent (not the raw target) per connection, so clients
+    // see continuous motion even though MovementSystem only advances the target itself
+    // every MOVEMENT_TARGET_INTERVAL_TICKS ticks.
     new PositionSmoothingSystem(),
-    new SnapshotBroadcastSystem(services.resolve(NETWORK_SERVICE)),
+    // Per-connection, spatially-filtered EntityUpdatePacket unicast — replaces the old
+    // SnapshotBroadcastSystem's identical-frame-to-everyone broadcast. See
+    // InterestManagementSystem's own doc comment for why this can't just call
+    // NetworkService.broadcast() the way earlier stages did.
+    new InterestManagementSystem(services.resolve(CONNECTION_REGISTRY)),
   ];
 }

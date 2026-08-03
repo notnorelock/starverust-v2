@@ -1,10 +1,12 @@
 import { Opcode } from '@starve/protocol';
+import { EntityType } from '@starve/shared';
 import { createClientWorld } from '../world/ClientWorldFactory';
 import { CanvasContext2DProvider } from '../render/CanvasContext2DProvider';
 import { Renderer } from '../render/Renderer';
 import { RenderSystem } from '../render/systems/RenderSystem';
 import { Camera2D } from '../camera/Camera2D';
 import { SnapshotBuffer } from '../network/SnapshotBuffer';
+import { EntityTypeRegistry } from '../network/EntityTypeRegistry';
 import { NetworkClient } from '../network/NetworkClient';
 import { PacketHandlerRegistry } from '../network/PacketHandlerRegistry';
 import { KeyboardInputSource } from '../input/KeyboardInputSource';
@@ -24,12 +26,13 @@ export function bootstrapClient(mountPoint: HTMLElement): GameClient {
   const renderer = new Renderer(canvasProvider);
   const camera = new Camera2D(window.innerWidth, window.innerHeight);
   const snapshotBuffer = new SnapshotBuffer();
+  const entityTypes = new EntityTypeRegistry();
 
   world.services.register(CANVAS_PROVIDER, canvasProvider);
   world.services.register(CAMERA_SERVICE, camera);
   world.services.register(SNAPSHOT_BUFFER, snapshotBuffer);
 
-  const renderSystem = new RenderSystem(canvasProvider, renderer, camera, snapshotBuffer);
+  const renderSystem = new RenderSystem(canvasProvider, renderer, camera, snapshotBuffer, entityTypes);
   world.registerSystem(renderSystem);
 
   const handlers = new PacketHandlerRegistry();
@@ -51,20 +54,39 @@ export function bootstrapClient(mountPoint: HTMLElement): GameClient {
     });
   });
 
+  // Sent once, right after connecting — seeds initial render state for every entity that
+  // already existed, before this connection's first (spatially-filtered) EntityUpdate
+  // arrives. See PlayerSession.onConnectionEstablished / SnapshotBuffer.seed(). Also
+  // self-contained for entityType (unlike EntityUpdatePacket) so this doesn't depend on
+  // the separate EntityInsert catch-up loop having already run first.
   handlers.on(Opcode.WorldSnapshot, (packet) => {
+    snapshotBuffer.seed(packet);
+    for (const entity of packet.entities) {
+      entityTypes.insert(entity.entityId, entity.entityType as EntityType);
+    }
+  });
+
+  // The recurring, per-connection, spatially-filtered stream — see InterestManagementSystem.
+  handlers.on(Opcode.EntityUpdate, (packet) => {
     snapshotBuffer.push(packet);
     gameClient.onServerTick(packet.serverTick);
   });
 
-  // EntityInsert only needs to be observed here for entities the client hasn't seen yet
-  // via WorldSnapshot — RenderSystem.ensureInterpolatedEntity() already lazily spawns the
-  // client-side entity/components the first time an id shows up in a snapshot, so there's
-  // nothing further to do for that case. What EntityInsert *does* provide that snapshots
-  // never will is entityType, learned once per entity — no consumer needs it yet (Stage 1
-  // only ever draws a circle either way), but the wire format is here for when one does.
+  // Entity lifecycle: broadcast once when an entity is created (including, for a freshly
+  // connected client, once per entity that already existed — see PlayerSession) or
+  // destroyed. entityType is carried on this and on WorldSnapshotPacket, never on the
+  // high-frequency EntityUpdatePacket — RenderSystem reads it from entityTypes when it
+  // first spawns an entity's visual (see RenderSystem.ensureInterpolatedEntity), so future
+  // NPC/mob types can render distinctly instead of every entity defaulting to the player's
+  // appearance.
+  handlers.on(Opcode.EntityInsert, (packet) => {
+    entityTypes.insert(packet.entityId, packet.entityType as EntityType);
+  });
+
   handlers.on(Opcode.EntityDestroy, (packet) => {
     world.entities.destroyEntity(packet.entityId);
     snapshotBuffer.remove(packet.entityId);
+    entityTypes.remove(packet.entityId);
   });
 
   return gameClient;

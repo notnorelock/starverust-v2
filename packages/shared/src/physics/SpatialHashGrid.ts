@@ -52,6 +52,36 @@ export class SpatialHashGrid {
     }
   }
 
+  /**
+   * Returns every entity inserted into any cell overlapping the given AABB, deduplicated.
+   * Unlike forEachPair (which visits pairs sharing a cell, for narrowphase), this answers
+   * "what's near this point/region" for a single query location — e.g. server-side
+   * interest management querying entities near one connection's player, not an all-pairs
+   * broadphase pass. Returns a fresh array each call (query volume is normally small
+   * relative to the whole grid, so this isn't the hot allocation-avoidance path
+   * clear()/insert() are).
+   */
+  queryRegion(minX: number, minY: number, maxX: number, maxY: number): EntityId[] {
+    const cellMinX = Math.floor(minX / this.cellSize);
+    const cellMinY = Math.floor(minY / this.cellSize);
+    const cellMaxX = Math.floor(maxX / this.cellSize);
+    const cellMaxY = Math.floor(maxY / this.cellSize);
+
+    const seen = new Set<EntityId>();
+    for (let cy = cellMinY; cy <= cellMaxY; cy += 1) {
+      for (let cx = cellMinX; cx <= cellMaxX; cx += 1) {
+        const bucket = this.buckets.get(`${cx},${cy}`);
+        if (!bucket) {
+          continue;
+        }
+        for (const entityId of bucket) {
+          seen.add(entityId);
+        }
+      }
+    }
+    return [...seen];
+  }
+
   private bucketFor(cellX: number, cellY: number): EntityId[] {
     const key = `${cellX},${cellY}`;
     let bucket = this.buckets.get(key);

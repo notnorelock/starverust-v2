@@ -11,6 +11,7 @@ import type { ClientConnection } from '../network/ClientConnection';
 import type { NetworkService } from '../network/NetworkService';
 import type { IPlayerRepository } from '../database/repositories/IPlayerRepository';
 import { createPlayerEntity } from '../entities/PlayerEntityFactory';
+import { serializeWorldSnapshot } from '../serialization/SnapshotSerializer';
 import type { WorldConfig } from '../world/WorldConfig';
 
 const logger = new Logger('PlayerSession');
@@ -20,14 +21,21 @@ const logger = new Logger('PlayerSession');
  * end-to-end with a placeholder guest account (real auth is a later stage), spawns
  * the player's entity in the World, and sends the Handshake packet assigning it.
  *
- * Entity lifecycle is explicit, not inferred from WorldSnapshotPacket presence — see
+ * Entity lifecycle is explicit, not inferred from packet presence — see
  * EntityInsertPacket/EntityDestroyPacket. Two things follow from that here: the new
  * player's own entity is broadcast as an EntityInsert to every already-connected client
- * (they'd otherwise never learn about it until the next snapshot arrived, up to one tick
- * late for something that should be immediate), and the new connection itself is sent an
- * EntityInsert for every entity that already existed before it connected (world geometry,
- * other players) — it has no other way to learn about them, since WorldSnapshotPacket only
- * ever conveys position/speed updates for entities the client already knows about.
+ * (they'd otherwise never learn about it until InterestManagementSystem's next tick
+ * happened to put it in range, which isn't guaranteed the way "you always learn about
+ * every entity that exists" was under the old broadcast-everything model), and the new
+ * connection itself is sent an EntityInsert for every entity that already existed before
+ * it connected (world geometry, other players) — it has no other way to learn about them
+ * otherwise, since neither InterestManagementSystem's recurring EntityUpdatePacket nor a
+ * one-time WorldSnapshotPacket carries entityType.
+ *
+ * WorldSnapshotPacket itself is sent once here, right after the EntityInsert catch-up
+ * loop, carrying every existing entity's initial position/speed — this seeds the new
+ * connection's client-side render state before its first (spatially-filtered, so possibly
+ * sparse) EntityUpdatePacket arrives a tick later.
  */
 export async function onConnectionEstablished(
   connection: ClientConnection,
@@ -46,8 +54,7 @@ export async function onConnectionEstablished(
     logger.warn(`Failed to persist guest player record for ${username}`, error);
   }
 
-  // Sent before this connection's own entity is created, so it isn't duplicated by the
-  // broadcast EntityInsert below.
+  // Sent before this connection's own entity is created, so neither loop duplicates it.
   for (const entityId of world.entities.query(PositionComponent, EntityTypeComponent)) {
     const position = world.entities.getComponent(entityId, PositionComponent)!;
     const entityType = world.entities.getComponent(entityId, EntityTypeComponent)!;
@@ -55,6 +62,7 @@ export async function onConnectionEstablished(
       encodeEntityInsert({ entityId, entityType: entityType.entityType, x: position.x, y: position.y }),
     );
   }
+  connection.send(serializeWorldSnapshot(world, 0));
 
   const entityId = createPlayerEntity(world, worldConfig.spawnX, worldConfig.spawnY);
   connection.entityId = entityId;

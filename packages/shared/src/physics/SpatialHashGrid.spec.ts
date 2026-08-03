@@ -62,4 +62,32 @@ describe('SpatialHashGrid', () => {
 
     expect(pairs.length).toBeGreaterThanOrEqual(2);
   });
+
+  describe('queryRegion', () => {
+    it('returns entities whose cells overlap the queried region', () => {
+      const grid = new SpatialHashGrid(10);
+      grid.insert(1, 0, 0, 1, 1);
+      grid.insert(2, 100, 100, 101, 101);
+
+      const result = grid.queryRegion(-5, -5, 5, 5);
+
+      expect(result).toEqual([1]);
+    });
+
+    it('returns an empty array when nothing overlaps the region', () => {
+      const grid = new SpatialHashGrid(10);
+      grid.insert(1, 100, 100, 101, 101);
+
+      expect(grid.queryRegion(-5, -5, 5, 5)).toEqual([]);
+    });
+
+    it('deduplicates an entity spanning multiple cells within the queried region', () => {
+      const grid = new SpatialHashGrid(10);
+      grid.insert(1, 5, 0, 15, 1); // spans cells (0,0) and (1,0)
+
+      const result = grid.queryRegion(-50, -50, 50, 50);
+
+      expect(result).toEqual([1]);
+    });
+  });
 });

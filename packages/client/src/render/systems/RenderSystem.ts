@@ -1,10 +1,17 @@
-import { System, PositionComponent, type ComponentType, type World } from '@starve/shared';
+import { System, PositionComponent, EntityType, type ComponentType, type World } from '@starve/shared';
 import type { CanvasContext2DProvider } from '../CanvasContext2DProvider';
 import type { Renderer } from '../Renderer';
 import type { Camera2D } from '../../camera/Camera2D';
 import type { SnapshotBuffer } from '../../network/SnapshotBuffer';
+import type { EntityTypeRegistry } from '../../network/EntityTypeRegistry';
 import { RenderableComponent } from '../../ecs/components/RenderableComponent';
 import { InterpolationComponent } from '../../ecs/components/InterpolationComponent';
+
+/** Placeholder per-EntityType fill color until real sprites exist (see RenderableComponent). */
+const COLOR_BY_ENTITY_TYPE: Partial<Record<EntityType, string>> = {
+  [EntityType.Player]: '#ff8a7c',
+};
+const LOCAL_PLAYER_COLOR = '#7cffb2';
 
 /**
  * The client's only onUpdate-implementing system: runs every rAF frame (variable rate),
@@ -21,6 +28,7 @@ export class RenderSystem extends System {
     private readonly renderer: Renderer,
     private readonly camera: Camera2D,
     private readonly snapshotBuffer: SnapshotBuffer,
+    private readonly entityTypes: EntityTypeRegistry,
   ) {
     super();
   }
@@ -61,12 +69,14 @@ export class RenderSystem extends System {
     interpolation.y = y;
 
     if (!world.entities.hasComponent(entityId, RenderableComponent)) {
+      const entityType = this.entityTypes.get(entityId);
+      const isLocalPlayer = entityId === this.localEntityId;
       world.entities.addComponent(
         entityId,
         RenderableComponent,
         new RenderableComponent(entityId, {
-          color: entityId === this.localEntityId ? '#7cffb2' : '#ff8a7c',
-          isLocalPlayer: entityId === this.localEntityId,
+          color: isLocalPlayer ? LOCAL_PLAYER_COLOR : COLOR_BY_ENTITY_TYPE[entityType] ?? '#888888',
+          isLocalPlayer,
         }),
       );
     }

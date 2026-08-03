@@ -15,4 +15,5 @@ export enum Opcode {
   WorldSnapshot = 0x20,
   EntityInsert = 0x21,
   EntityDestroy = 0x22,
+  EntityUpdate = 0x23,
 }
