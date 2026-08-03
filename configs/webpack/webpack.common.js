@@ -19,10 +19,14 @@ const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
  *   these end up processing ts-loader's output). Unused today (empty by default) but kept
  *   as an extension point — same reasoning as styleLoader: a parameter here, not a second
  *   `.ts` rule merged in by webpack.prod.js, to avoid the same double-processing problem.
+ * @param {import('ts-loader/dist/interfaces').TsLoaderOptions['getCustomTransformers']} [options.getCustomTransformers] -
+ *   forwarded straight to ts-loader (see webpack.prod.js, which uses this for
+ *   obfuscate-properties.transformer.cjs). Undefined by default/for dev — ts-loader treats
+ *   `undefined` the same as not passing the option at all.
  * @returns {import('webpack').Configuration}
  */
 function createCommonConfig(packageRoot, options = {}) {
-  const { styleLoader = 'style-loader', postTsLoaders = [] } = options;
+  const { styleLoader = 'style-loader', postTsLoaders = [], getCustomTransformers } = options;
 
   return {
     entry: path.join(packageRoot, 'src/index.ts'),
@@ -50,6 +54,7 @@ function createCommonConfig(packageRoot, options = {}) {
                 // which ts-loader would reject as "not under rootDir" — so bundling uses a
                 // separate, looser tsconfig with no rootDir restriction instead.
                 configFile: path.join(packageRoot, 'tsconfig.webpack.json'),
+                getCustomTransformers,
               },
             },
           ],
