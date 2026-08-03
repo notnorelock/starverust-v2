@@ -127,16 +127,23 @@ need different sizes. The pieces:
   `DEFAULT_WORLD_CONFIG` (50x50, spawn at origin) is Stage 1's only config, loaded by
   `ServerBootstrap` — swapping in a map-file loader later only touches that one call site.
 - `shared/src/math/WorldBounds.ts` — the generic `WorldBounds` interface, shared so both
-  `WorldBoundsSystem` and the client's `Camera2D` can consume it without either depending
-  on `server`'s `WorldConfig` type.
-- `WorldBoundsSystem` (`shared/src/ecs/systems`, registered server-side only — see
-  `TickPipeline`) takes `WorldBounds` as a **constructor parameter**, not an import.
-  `GameServer` computes it once from its own `WorldConfig` and passes it through
-  `buildTickPipeline(services, worldBounds)`. It clamps every positioned entity to the
-  rectangle each tick and zeroes velocity on whichever axis hit a bound; this stands in
-  for Stage 1's simplified Physics/Collision pipeline step (full broadphase/narrowphase
-  collision is a later stage). Bounds enforcement is server-authoritative only — the
-  client never clamps entity positions itself, only its camera (see below).
+  `server/src/entities/WorldBoundaryFactory.ts` and the client's `Camera2D` can consume it
+  without either depending on `server`'s `WorldConfig` type.
+- **World edges are ordinary static collision geometry, not a dedicated clamping
+  system.** `WorldBoundaryFactory.createWorldBoundaryWalls(world, bounds)` creates four
+  static `RectColliderComponent` walls (`layer: World`) around the outside of the
+  `WorldBounds` rectangle, extending outward from it by `WALL_THICKNESS` so the playable
+  area is exactly `WorldBounds`, not shrunk by the wall. `GameServer` calls this once at
+  startup (not per-connection — the boundary is shared world geometry) and otherwise
+  never touches it again; `CollisionSystem`'s normal broadphase/narrowphase/resolution
+  pass is what keeps entities inside the map from here on, the same as any other static
+  obstacle. There used to be a separate `WorldBoundsSystem` doing a manual per-tick
+  clamp-and-zero-velocity pass; it's gone — a hard clamp and a collision-resolved wall
+  produce the same practical result (can't cross the edge), but routing it through
+  `CollisionSystem` means the boundary participates in the same layer/mask rules, sliding
+  resolution, and CCD sub-stepping as everything else instead of being a special case.
+  Bounds enforcement is server-authoritative only — the client never clamps entity
+  positions itself, only its camera (see below).
 - The client learns the bounds **over the wire**, not from a constant: `HandshakePacket`
   carries `worldMinX/MaxX/MinY/MaxY` (f32 each), and `ClientBootstrap`'s Handshake handler
   calls `camera.setBounds(...)` with them. Before the handshake arrives, `Camera2D`
@@ -180,8 +187,8 @@ was caught and fixed during implementation (see `PlayerEntityFactory`'s
 `PhysicsSystem` must record `prevX`/`prevY` and turn acceleration into velocity before
 `MovementSystem` integrates that velocity into position; the reverse order would make
 `prevX`/`prevY` already reflect the current tick's movement, breaking CCD's displacement
-check. `CollisionSystem` runs after both, then `WorldBoundsSystem` runs last as a final
-world-edge catch-all clamp.
+check. `CollisionSystem` runs after both — world edges are resolved by it too, as static
+`RectColliderComponent` walls (see "World bounds" above), not a separate clamping pass.
 
 **Narrowphase normal direction contract** (`shared/src/physics/Narrowphase.ts` /
 `Manifold.ts`): every `test*` function returns a manifold whose `normal` points from the
@@ -244,7 +251,8 @@ position — call `follow(x, y)` once per frame to update the target, then `upda
 advance the ease; `x`/`y` getters read the current eased position. The follow target is
 also clamped to the world bounds before being handed to the ease, so the camera never
 shows space outside the playable area — this is a client-side visual-only clamp,
-independent of and secondary to the server's authoritative `WorldBoundsSystem`. The
+independent of and secondary to the server's authoritative boundary collision (see
+"World bounds" above). The
 `Easing` module's free functions (`easeOutQuad`, `easeOutCubic`, `easeInOutQuad`, etc.)
 and the generic `Ease`/`Ease2D` tween classes are reusable for any future eased value
 (UI transitions, hit-flash, etc.), not camera-specific.
@@ -254,21 +262,46 @@ and the generic `Ease`/`Ease2D` tween classes are reusable for any future eased 
 Maps to a 12-step conceptual pipeline (Input → Movement → Physics → Collision → AI →
 Combat → Crafting → Inventory → Projectiles → Environment → Networking → Snapshot).
 Actual registration order in `buildTickPipeline()`: `InputApplicationSystem` →
-`PhysicsSystem` → `MovementSystem` → `CollisionSystem` → `WorldBoundsSystem` →
-`SnapshotBroadcastSystem` — note `PhysicsSystem` runs before `MovementSystem` despite the
-conceptual step numbers (see the "Physics & collision engine" section above for why; the
-registration-order comment in `TickPipeline.ts` explains it inline too). The remaining
-unimplemented steps (AI, Combat, Crafting, Inventory, Projectiles, Environment) are
-documented, ordered insertion points in that file's comments, not placeholder no-op
-systems — adding a later-stage system is one `registerSystem()` call inserted at the
-matching position, not a restructure of `World` or this function.
-`World.fixedUpdate()`'s system-array iteration order *is* the pipeline; there's no
-separate pipeline data structure.
+`PhysicsSystem` → `MovementSystem` → `CollisionSystem` → `PositionSmoothingSystem` →
+`SnapshotBroadcastSystem` (world edges are resolved inside `CollisionSystem`, as static
+walls — see "World bounds" above — not a separate pipeline step) — note `PhysicsSystem` runs before
+`MovementSystem` despite the conceptual step numbers (see the "Physics & collision engine"
+section above for why; the registration-order comment in `TickPipeline.ts` explains it
+inline too). The remaining unimplemented steps (AI, Combat, Crafting, Inventory,
+Projectiles, Environment) are documented, ordered insertion points in that file's
+comments, not placeholder no-op systems — adding a later-stage system is one
+`registerSystem()` call inserted at the matching position, not a restructure of `World` or
+this function. `World.fixedUpdate()`'s system-array iteration order *is* the pipeline;
+there's no separate pipeline data structure.
 
 The tick loop itself (`shared/src/time/FixedTimestepLoop.ts`) uses an accumulator with
 an injectable clock/scheduler specifically so it's unit-testable without real timers.
 Don't replace it with a bare `setInterval` — accumulator drift-correction is why it
 exists.
+
+**Movement target vs. broadcast position (`MovementSystem` / `PositionSmoothingSystem`)
+— ported from a reference implementation's `pos`/`pos.r` split, not this project's own
+invention.** `PositionComponent` is a *target*: `MovementSystem` only advances it every
+`MOVEMENT_TARGET_INTERVAL_TICKS` ticks (throttled, using that many ticks' worth of `dt` in
+one jump when it does fire), not every tick — mirroring the reference's ~120ms movement
+throttle, ported as a tick count rather than a wall-clock duration so it scales with this
+server's own `TICK_RATE` instead of assuming a specific rate. `RenderPositionComponent`
+is the actual broadcast-facing value: `PositionSmoothingSystem` (runs last in the
+pipeline, after collision/bounds have fully resolved the target for the tick) eases it
+toward `PositionComponent` by a fixed distance every single tick
+(`RENDER_POSITION_CHASE_SPEED * fixedDt`), snapping once within one step of the target —
+this is a constant-speed chase, not an exponential/eased-percentage approach. This is what
+turns the target's coarse, infrequent jumps into continuous per-tick motion on the wire.
+`SnapshotSerializer` broadcasts `RenderPositionComponent` when an entity has one (falling
+back to raw `PositionComponent` for entities `PositionSmoothingSystem` doesn't touch,
+e.g. static world geometry) — never the raw target directly for anything that moves.
+`PlayerEntityFactory` seeds `RenderPositionComponent` at the spawn point up front (rather
+than relying on `PositionSmoothingSystem`'s lazy first-tick seeding) so the very first
+broadcast already has a value to read. If you add a new movement-driven entity type, give
+it both components the same way; if you change `MOVEMENT_TARGET_INTERVAL_TICKS` or
+`RENDER_POSITION_CHASE_SPEED`, keep in mind they're tuned as a pair — a chase speed too
+slow relative to the throttle interval means the broadcast position permanently lags
+behind the target instead of ever catching up between jumps.
 
 ### Networking (`packages/protocol`, `server/src/network`, `client/src/network`)
 
@@ -386,15 +419,36 @@ colliding with interpolated remote state). This is snapshot interpolation only �
 no client-side prediction/reconciliation yet; if you add it, it plugs in between input
 sampling and `SnapshotBuffer` without needing to touch `RenderSystem` or the transport.
 
-**The locally-controlled entity is exempt from interpolation delay.** `SnapshotBuffer.sample()`
-takes an optional `snapEntityId` — `RenderSystem` passes `this.localEntityId` — and that
-one entity is rendered from the single latest snapshot instead of the interpolated
-(delayed) result. Without this, the local player's own movement looks laggy/glitchy on
-every direction change: since its input is already instantaneous client-side, animating
-it toward an always-slightly-stale interpolation target (the same ~interpolationDelay
-remote entities use to smooth 30Hz updates) fights visually with the player's own input.
-If you touch `SnapshotBuffer.sample()`, keep this distinction — remote entities need
-interpolation to look smooth, the local entity needs to not have it.
+**The locally-controlled entity is exempt from interpolation delay, but still needs
+smoothing.** `SnapshotBuffer.sample()` takes an optional `snapEntityId` — `RenderSystem`
+passes `this.localEntityId` — and that one entity is rendered via the private
+`sampleLocal()` path instead of the delayed interpolated result. `sampleLocal()`
+extrapolates forward from the last two received snapshots' trajectory, based on how much
+real time has elapsed since the latest one arrived (capped at `MAX_EXTRAPOLATION_FACTOR`
+ticks so a stalled connection holds position instead of running away) — it does **not**
+simply render the latest snapshot verbatim. That earlier approach looked stepped:
+snapshots arrive once per server tick (~50ms at the default 20 TPS — see
+`DEFAULT_TICK_RATE`), so the entity's screen position jumped in discrete increments once
+per tick instead of gliding every rendered frame. That
+in turn broke `Camera2D.follow()` (see below), which is fed the local entity's position
+every frame — a jumpy target meant `Ease2D.setTarget()` reset `elapsed = 0` on nearly
+every call while moving, so the follow ease could never converge and the camera visibly
+lagged the player instead of centering on them. Extrapolating produces a target that
+changes smoothly every frame, which is what let the camera ease actually catch up. If you
+touch `SnapshotBuffer.sample()`/`sampleLocal()`, keep the distinction between the two
+paths: remote entities need delayed interpolation to look smooth despite only having past
+data to interpolate *between*; the local entity needs undelayed extrapolation so it
+doesn't lag behind the player's own already-instantaneous input.
+
+**Interpolation delay is computed from the server's actual tick rate, learned over the
+wire, not the `DEFAULT_TICK_RATE` constant.** `RenderSystem.tickRate` defaults to
+`DEFAULT_TICK_RATE` but is overwritten from `HandshakePacket.tickRate` in
+`ClientBootstrap`'s Handshake handler (the same pattern already used for `localEntityId`
+and `camera.setBounds(...)`) — mirroring how world bounds are per-instance config learned
+from the server rather than a shared constant (see "World bounds" above). A regional
+server instance running at a different `TICK_RATE` (env-configurable, see `EnvConfig.ts`)
+would otherwise make the client compute an interpolation window sized for the wrong
+snapshot cadence, reintroducing the stepping this system exists to smooth out.
 
 ### Database (`packages/server/src/database`)
 

@@ -13,4 +13,6 @@ export enum Opcode {
   Handshake = 0x01,
   PlayerInput = 0x10,
   WorldSnapshot = 0x20,
+  EntityInsert = 0x21,
+  EntityDestroy = 0x22,
 }

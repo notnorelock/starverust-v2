@@ -2,10 +2,9 @@ import {
   MovementSystem,
   PhysicsSystem,
   CollisionSystem,
-  WorldBoundsSystem,
+  PositionSmoothingSystem,
   type System,
   type ServiceContainer,
-  type WorldBounds,
 } from '@starve/shared';
 import { InputApplicationSystem } from '../systems/InputApplicationSystem';
 import { SnapshotBroadcastSystem } from '../systems/SnapshotBroadcastSystem';
@@ -20,9 +19,13 @@ import { NETWORK_SERVICE, CONNECTION_REGISTRY } from './ServiceKeys';
  *  1. Input        -> InputApplicationSystem   (implemented)
  *  2. Movement     -> MovementSystem           (implemented, shared w/ potential client use)
  *  3. Physics      -> PhysicsSystem            (implemented: acceleration/friction/drag integration)
- *  4. Collision    -> CollisionSystem,          (implemented: spatial-hash broadphase, circle/rect
- *                     WorldBoundsSystem          narrowphase, push/slide resolution, CCD sub-stepping,
- *                                                 then world-edge clamping as a final catch-all)
+ *  4. Collision    -> CollisionSystem           (implemented: spatial-hash broadphase, circle/rect
+ *                                                 narrowphase, push/slide resolution, CCD sub-stepping;
+ *                                                 world edges are ordinary static RectColliderComponent
+ *                                                 walls resolved here too — see WorldBoundaryFactory —
+ *                                                 not a separate clamping system/pipeline step)
+ *                     PositionSmoothingSystem    eases the broadcast-facing RenderPositionComponent
+ *                                                 toward the now-fully-resolved target every tick
  *  5. AI           -> [Stage 3+] mob behavior trees
  *  6. Combat       -> [Stage 3+] damage resolution
  *  7. Crafting     -> [Stage 4+] recipe processing
@@ -32,7 +35,7 @@ import { NETWORK_SERVICE, CONNECTION_REGISTRY } from './ServiceKeys';
  * 11. Networking \_ SnapshotBroadcastSystem folds both remaining steps together
  * 12. Snapshot    /  for Stage 1 (serialize + broadcast in one pass)
  */
-export function buildTickPipeline(services: ServiceContainer, worldBounds: WorldBounds): System[] {
+export function buildTickPipeline(services: ServiceContainer): System[] {
   return [
     new InputApplicationSystem(services.resolve(CONNECTION_REGISTRY)),
     // PhysicsSystem runs before MovementSystem despite the conceptual step numbering
@@ -44,7 +47,13 @@ export function buildTickPipeline(services: ServiceContainer, worldBounds: World
     new PhysicsSystem(),
     new MovementSystem(),
     new CollisionSystem(),
-    new WorldBoundsSystem(worldBounds),
+    // Runs last, after the target position (PositionComponent) has been fully resolved
+    // by collision against everything, including the boundary walls — eases
+    // RenderPositionComponent toward that final target every tick. SnapshotBroadcastSystem
+    // below broadcasts RenderPositionComponent, not the raw target, so clients see
+    // continuous motion even though MovementSystem only advances the target itself every
+    // MOVEMENT_TARGET_INTERVAL_TICKS ticks.
+    new PositionSmoothingSystem(),
     new SnapshotBroadcastSystem(services.resolve(NETWORK_SERVICE)),
   ];
 }

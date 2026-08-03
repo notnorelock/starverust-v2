@@ -18,7 +18,9 @@ describe('decodeAny', () => {
   });
 
   it('dispatches WorldSnapshot to the correct decoder', () => {
-    const wire = finalizeForWire(encodeWorldSnapshot({ serverTick: 5, entities: [{ entityId: 1, x: 1, y: 2 }] }));
+    const wire = finalizeForWire(
+      encodeWorldSnapshot({ serverTick: 5, entities: [{ entityId: 1, x: 1, y: 2, speed: 200 }] }),
+    );
     const result = decodeAny(wire);
     expect(result.opcode).toBe(Opcode.WorldSnapshot);
     if (result.opcode === Opcode.WorldSnapshot) {

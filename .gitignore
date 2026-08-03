@@ -6,6 +6,7 @@ build/
 Thumbs.db
 *.log
 npm-debug.log*
+client-old.js
 
 # Bun
 bun.lock.bak

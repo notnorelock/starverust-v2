@@ -8,6 +8,13 @@ export interface EntitySnapshot {
   entityId: number;
   x: number;
   y: number;
+  /**
+   * This entity's current movement speed in world units/second (e.g. PLAYER_MOVE_SPEED or
+   * PLAYER_SPRINT_SPEED while sprinting) — broadcast so clients can chase this entity's
+   * render position at the same speed it's actually moving at, rather than assuming a
+   * fixed constant. See SnapshotBuffer's chase-and-snap smoothing.
+   */
+  speed: number;
 }
 
 /**
@@ -22,9 +29,9 @@ export interface WorldSnapshotPacket {
 // Payload layout:
 // [0..3] u32 serverTick
 // [4..5] u16 entityCount
-// repeated per entity (12 bytes): u32 entityId, f32 x, f32 y
+// repeated per entity (16 bytes): u32 entityId, f32 x, f32 y, f32 speed
 const HEADER_FIELDS_SIZE = 6;
-const ENTITY_RECORD_SIZE = 12;
+const ENTITY_RECORD_SIZE = 16;
 
 export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
   const payloadSize = HEADER_FIELDS_SIZE + packet.entities.length * ENTITY_RECORD_SIZE;
@@ -38,6 +45,7 @@ export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
     writeU32(entity.entityId);
     writeF32(entity.x);
     writeF32(entity.y);
+    writeF32(entity.speed);
   }
 
   return endWrite();
@@ -52,7 +60,8 @@ export function decodeWorldSnapshot(): WorldSnapshotPacket {
     const entityId = readU32();
     const x = readF32();
     const y = readF32();
-    entities.push({ entityId, x, y });
+    const speed = readF32();
+    entities.push({ entityId, x, y, speed });
   }
 
   return { serverTick, entities };

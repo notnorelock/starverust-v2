@@ -1,4 +1,4 @@
-import { System, PositionComponent, INTERPOLATION_DELAY_TICKS, DEFAULT_TICK_RATE, type ComponentType, type World } from '@starve/shared';
+import { System, PositionComponent, type ComponentType, type World } from '@starve/shared';
 import type { CanvasContext2DProvider } from '../CanvasContext2DProvider';
 import type { Renderer } from '../Renderer';
 import type { Camera2D } from '../../camera/Camera2D';
@@ -6,13 +6,11 @@ import type { SnapshotBuffer } from '../../network/SnapshotBuffer';
 import { RenderableComponent } from '../../ecs/components/RenderableComponent';
 import { InterpolationComponent } from '../../ecs/components/InterpolationComponent';
 
-const INTERPOLATION_DELAY_MS = (INTERPOLATION_DELAY_TICKS / DEFAULT_TICK_RATE) * 1000;
-
 /**
  * The client's only onUpdate-implementing system: runs every rAF frame (variable rate),
- * independent of the server's fixed tick. Reads interpolated positions from SnapshotBuffer,
- * writes them into each entity's InterpolationComponent, then draws RenderableComponent
- * entities via raw CanvasRenderingContext2D.
+ * independent of the server's fixed tick. Reads chase-and-snap smoothed positions from
+ * SnapshotBuffer, writes them into each entity's InterpolationComponent, then draws
+ * RenderableComponent entities via raw CanvasRenderingContext2D.
  */
 export class RenderSystem extends System {
   readonly query: ReadonlyArray<ComponentType> = [RenderableComponent];
@@ -28,7 +26,7 @@ export class RenderSystem extends System {
   }
 
   override onUpdate(dt: number, world: World): void {
-    const sampled = this.snapshotBuffer.sample(INTERPOLATION_DELAY_MS, this.localEntityId);
+    const sampled = this.snapshotBuffer.sample(dt);
 
     for (const sample of sampled) {
       this.ensureInterpolatedEntity(world, sample.entityId, sample.x, sample.y);
@@ -95,8 +93,40 @@ export class RenderSystem extends System {
       context.fillStyle = renderable.color;
       context.arc(screen.x, screen.y, renderable.radius, 0, Math.PI * 2);
       context.fill();
+
+      this.drawDebugLagLine(entityId, screen);
     }
 
     context.restore();
+  }
+
+  /**
+   * DEBUG ONLY — draws a line from the raw last-received-snapshot position to the entity's
+   * current smoothed render position, for every entity (not just local). Its length is a
+   * direct visualization of how far the chase-and-snap smoothing (see SnapshotBuffer) is
+   * currently lagging behind the latest network data: it stretches out the instant a new
+   * snapshot arrives and shrinks back to a point once the render position has caught up.
+   * Remove once movement smoothing is confirmed to look right.
+   */
+  private drawDebugLagLine(entityId: number, renderScreen: { x: number; y: number }): void {
+    const raw = this.snapshotBuffer.latestRawPosition(entityId);
+    if (!raw) {
+      return;
+    }
+
+    const { context } = this.canvasProvider;
+    const rawScreen = this.camera.worldToScreen(raw.x, raw.y);
+
+    context.beginPath();
+    context.strokeStyle = '#ff3b3b';
+    context.lineWidth = 2;
+    context.moveTo(rawScreen.x, rawScreen.y);
+    context.lineTo(renderScreen.x, renderScreen.y);
+    context.stroke();
+
+    context.beginPath();
+    context.fillStyle = '#ff3b3b';
+    context.arc(rawScreen.x, rawScreen.y, 3, 0, Math.PI * 2);
+    context.fill();
   }
 }

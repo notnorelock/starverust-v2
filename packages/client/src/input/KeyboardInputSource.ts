@@ -9,6 +9,7 @@ const KEY_TO_FLAG: Record<string, InputFlag> = {
   "ArrowLeft": InputFlag.Left,
   "KeyD": InputFlag.Right,
   "ArrowRight": InputFlag.Right,
+  "ShiftLeft": InputFlag.Sprint,
 };
 
 export type DirectionChangeListener = (direction: number) => void;

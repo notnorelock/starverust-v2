@@ -1,96 +1,184 @@
 import { describe, expect, it } from 'vitest';
 import { SnapshotBuffer } from './SnapshotBuffer';
+import { PLAYER_MOVE_SPEED, PLAYER_SPRINT_SPEED, CLIENT_POSITION_SNAP_DISTANCE } from '@starve/shared';
 import type { WorldSnapshotPacket } from '@starve/protocol';
 
 function packet(serverTick: number, entities: WorldSnapshotPacket['entities']): WorldSnapshotPacket {
   return { serverTick, entities };
 }
 
-function createBufferWithClock(): { buffer: SnapshotBuffer; advance: (ms: number) => void } {
-  let time = 0;
-  const buffer = new SnapshotBuffer(() => time);
-  return { buffer, advance: (ms: number) => (time += ms) };
-}
-
 describe('SnapshotBuffer', () => {
   it('returns an empty list with no snapshots pushed', () => {
-    const { buffer } = createBufferWithClock();
-    expect(buffer.sample(100)).toEqual([]);
+    const buffer = new SnapshotBuffer();
+    expect(buffer.sample(1 / 60)).toEqual([]);
   });
 
-  it('returns the single snapshot verbatim when only one has arrived', () => {
-    const { buffer } = createBufferWithClock();
-    buffer.push(packet(1, [{ entityId: 1, x: 5, y: 5 }]));
-    expect(buffer.sample(100)).toEqual([{ entityId: 1, x: 5, y: 5 }]);
+  it('seeds the render position exactly at the target on the first snapshot mentioning an entity', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 5, y: 5, speed: PLAYER_MOVE_SPEED }]));
+    expect(buffer.sample(1 / 60)).toEqual([{ entityId: 1, x: 5, y: 5 }]);
   });
 
-  it('interpolates between two snapshots at the delayed render time', () => {
-    const { buffer, advance } = createBufferWithClock();
-    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0 }]));
-    advance(100);
-    buffer.push(packet(2, [{ entityId: 1, x: 10, y: 0 }]));
-    advance(50); // now = 150, renderTime with 100ms delay = 50 -> halfway between t=0 and t=100
+  it('chases the latest network position by the entity\'s broadcast speed * dt rather than jumping straight to it', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60); // seeds render position at (0,0)
 
-    const result = buffer.sample(100);
-    expect(result).toHaveLength(1);
+    // Kept under CLIENT_POSITION_SNAP_DISTANCE so this exercises the chase path, not the teleport-snap path.
+    buffer.push(packet(2, [{ entityId: 1, x: 100, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    const result = buffer.sample(1 / 60);
+
+    const expectedStep = PLAYER_MOVE_SPEED * (1 / 60);
+    expect(result[0]!.x).toBeCloseTo(expectedStep, 5);
+    expect(result[0]!.x).toBeLessThan(100);
+  });
+
+  it('chases at PLAYER_SPRINT_SPEED when the entity broadcasts a higher speed than PLAYER_MOVE_SPEED', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_SPRINT_SPEED }]));
+    buffer.sample(1 / 60);
+
+    buffer.push(packet(2, [{ entityId: 1, x: 100, y: 0, speed: PLAYER_SPRINT_SPEED }]));
+    const result = buffer.sample(1 / 60);
+
+    const expectedStep = PLAYER_SPRINT_SPEED * (1 / 60);
+    expect(result[0]!.x).toBeCloseTo(expectedStep, 5);
+    expect(expectedStep).toBeGreaterThan(PLAYER_MOVE_SPEED * (1 / 60));
+  });
+
+  it('keeps chasing every frame between snapshots instead of freezing once a chase step is applied', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60);
+
+    buffer.push(packet(2, [{ entityId: 1, x: 100, y: 0, speed: PLAYER_MOVE_SPEED }]));
+
+    const xs = [buffer.sample(1 / 60)[0]!.x, buffer.sample(1 / 60)[0]!.x, buffer.sample(1 / 60)[0]!.x];
+    expect(xs[1]).toBeGreaterThan(xs[0]!);
+    expect(xs[2]).toBeGreaterThan(xs[1]!);
+  });
+
+  it('snaps to the target once a step would reach or overshoot it, instead of overshooting past it', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60); // seeds render position at (0,0)
+
+    buffer.push(packet(2, [{ entityId: 1, x: 0.001, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    const result = buffer.sample(1 / 60);
+
+    expect(result[0]!.x).toBe(0.001);
+  });
+
+  it('still converges to the target even when the entity broadcasts speed 0 (e.g. it just stopped)', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60);
+
+    buffer.push(packet(2, [{ entityId: 1, x: 5, y: 0, speed: 0 }]));
+
+    let result = buffer.sample(1 / 60);
+    for (let i = 0; i < 60; i += 1) {
+      result = buffer.sample(1 / 60);
+    }
+
     expect(result[0]!.x).toBeCloseTo(5, 5);
   });
 
-  it('snapEntityId renders that entity from the latest snapshot, bypassing interpolation delay', () => {
-    const { buffer, advance } = createBufferWithClock();
-    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0 }]));
-    advance(100);
-    buffer.push(packet(2, [{ entityId: 1, x: 10, y: 0 }]));
-    advance(50);
+  it('converges to a stationary target over several frames', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60);
 
-    const interpolatedOnly = buffer.sample(100);
-    expect(interpolatedOnly[0]!.x).toBeCloseTo(5, 5);
+    buffer.push(packet(2, [{ entityId: 1, x: 5, y: 0, speed: PLAYER_MOVE_SPEED }]));
 
-    const withSnap = buffer.sample(100, 1);
-    expect(withSnap).toHaveLength(1);
-    expect(withSnap[0]!.x).toBe(10); // latest known position, not interpolated
+    let result = buffer.sample(1 / 60);
+    for (let i = 0; i < 60; i += 1) {
+      result = buffer.sample(1 / 60);
+    }
+
+    expect(result[0]!.x).toBeCloseTo(5, 5);
+    expect(result[0]!.y).toBe(0);
   });
 
-  it('snapEntityId adds the entity even if interpolation had no data for it yet', () => {
-    const { buffer, advance } = createBufferWithClock();
-    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0 }]));
-    advance(10);
-    buffer.push(packet(2, [{ entityId: 1, x: 1, y: 1 }, { entityId: 2, x: 9, y: 9 }]));
+  it('snaps directly to a position further than CLIENT_POSITION_SNAP_DISTANCE (teleport/respawn), not a slow chase', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60);
 
-    const result = buffer.sample(1000, 2); // huge delay so interpolation wouldn't reach entity 2 normally
-    const entity2 = result.find((e) => e.entityId === 2);
-    expect(entity2).toEqual({ entityId: 2, x: 9, y: 9 });
+    const teleportX = CLIENT_POSITION_SNAP_DISTANCE + 50;
+    buffer.push(packet(2, [{ entityId: 1, x: teleportX, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    const result = buffer.sample(1 / 60);
+
+    expect(result[0]!.x).toBe(teleportX);
   });
 
-  it('does not affect other entities when snapping one entityId', () => {
-    const { buffer, advance } = createBufferWithClock();
-    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0 }, { entityId: 2, x: 0, y: 0 }]));
-    advance(100);
-    buffer.push(packet(2, [{ entityId: 1, x: 10, y: 0 }, { entityId: 2, x: 20, y: 0 }]));
-    advance(50);
+  it('tracks multiple entities independently, each at its own broadcast speed', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(
+      packet(1, [
+        { entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED },
+        { entityId: 2, x: 0, y: 0, speed: PLAYER_SPRINT_SPEED },
+      ]),
+    );
+    buffer.sample(1 / 60);
 
-    const result = buffer.sample(100, 1);
+    buffer.push(
+      packet(2, [
+        { entityId: 1, x: 10, y: 0, speed: PLAYER_MOVE_SPEED },
+        { entityId: 2, x: 10, y: 0, speed: PLAYER_SPRINT_SPEED },
+      ]),
+    );
+    const result = buffer.sample(1 / 60);
+
     const entity1 = result.find((e) => e.entityId === 1)!;
     const entity2 = result.find((e) => e.entityId === 2)!;
-    expect(entity1.x).toBe(10); // snapped
-    expect(entity2.x).toBeCloseTo(10, 5); // still interpolated (halfway between 0 and 20)
+    expect(entity1.x).toBeCloseTo(PLAYER_MOVE_SPEED * (1 / 60), 5);
+    expect(entity2.x).toBeCloseTo(PLAYER_SPRINT_SPEED * (1 / 60), 5);
+    expect(entity2.x).toBeGreaterThan(entity1.x);
   });
 
-  it('drops the oldest snapshot once the buffer exceeds its max size', () => {
-    const { buffer, advance } = createBufferWithClock();
-    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0 }])); // pushed at t=0
-    advance(10);
-    buffer.push(packet(2, [{ entityId: 1, x: 1, y: 0 }])); // t=10
-    advance(10);
-    buffer.push(packet(3, [{ entityId: 1, x: 2, y: 0 }])); // t=20
-    advance(10);
-    buffer.push(packet(4, [{ entityId: 1, x: 3, y: 0 }])); // t=30 — evicts tick 1's snapshot (max size 3)
+  it('drops render state for entities no longer present in the latest snapshot', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(
+      packet(1, [
+        { entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED },
+        { entityId: 2, x: 0, y: 0, speed: PLAYER_MOVE_SPEED },
+      ]),
+    );
+    buffer.sample(1 / 60);
 
-    // now = 30. Ask for the state as of t=10 (renderTime = now - 20). If tick 1 (t=0)
-    // were still buffered, this would interpolate between t=0 and t=10; since it was
-    // evicted, the earliest remaining snapshot (t=10, x=1) is the floor and gets returned
-    // as-is because renderTime falls before every remaining from/to window.
-    const result = buffer.sample(20);
-    expect(result[0]!.x).toBe(1);
+    buffer.push(packet(2, [{ entityId: 1, x: 1, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    const result = buffer.sample(1 / 60);
+
+    expect(result.find((e) => e.entityId === 2)).toBeUndefined();
+  });
+
+  it('re-seeds an entity at its new target if it disappears and reappears in a later snapshot', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60);
+
+    buffer.push(packet(2, []));
+    buffer.sample(1 / 60);
+
+    buffer.push(packet(3, [{ entityId: 1, x: 50, y: 50, speed: PLAYER_MOVE_SPEED }]));
+    const result = buffer.sample(1 / 60);
+
+    expect(result).toEqual([{ entityId: 1, x: 50, y: 50 }]);
+  });
+
+  it('latestRawPosition returns the raw last-received snapshot position with no smoothing', () => {
+    const buffer = new SnapshotBuffer();
+    buffer.push(packet(1, [{ entityId: 1, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+    buffer.sample(1 / 60);
+
+    buffer.push(packet(2, [{ entityId: 1, x: 1000, y: 0, speed: PLAYER_MOVE_SPEED }]));
+
+    expect(buffer.latestRawPosition(1)).toEqual({ entityId: 1, x: 1000, y: 0 });
+  });
+
+  it('latestRawPosition returns undefined when no snapshot has arrived', () => {
+    const buffer = new SnapshotBuffer();
+    expect(buffer.latestRawPosition(1)).toBeUndefined();
   });
 });

@@ -29,8 +29,8 @@ export function boundsFromConfig(config: WorldConfig): WorldBounds {
  * touch any system or the tick pipeline.
  */
 export const DEFAULT_WORLD_CONFIG: WorldConfig = {
-  width: 50,
-  height: 50,
+  width: 5000,
+  height: 5000,
   spawnX: 0,
   spawnY: 0,
 };

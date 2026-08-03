@@ -20,8 +20,9 @@ const UNBOUNDED: WorldBounds = {
  * Follow smoothing uses Ease2D/easeOutQuad rather than snapping directly to the target
  * position, matching the eased-follow feel used elsewhere in this codebase's lineage.
  * Bounds-clamping is purely a client-side visual nicety (never shows space outside the
- * playable area) — the server's WorldBoundsSystem is the authoritative source of truth
- * for entity positions themselves. Bounds are set from the server's Handshake packet
+ * playable area) — the server's boundary-wall collision (see WorldBoundaryFactory) is
+ * the authoritative source of truth for entity positions themselves. Bounds are set from
+ * the server's Handshake packet
  * (see ClientBootstrap), not a hardcoded constant, since different server instances can
  * run differently-sized worlds.
  */

@@ -14,7 +14,7 @@
     "test:bun": "bun test packages/server/src/database/repositories/PlayerRepository.spec.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
-    "dev": "concurrently -n server,client -c blue,green \"bun run dev:server\" \"bun run dev:client\"",
+    "dev": "concurrently -n server,client -c blue,green -k --kill-signal SIGTERM \"bun run dev:server\" \"bun run dev:client\"",
     "dev:server": "bun run --filter '@starve/server' dev",
     "dev:client": "bun run --filter '@starve/client' dev",
     "build": "bun run typecheck && bun run --filter '@starve/client' build",

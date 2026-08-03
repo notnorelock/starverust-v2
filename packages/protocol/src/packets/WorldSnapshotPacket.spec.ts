@@ -21,7 +21,7 @@ describe('WorldSnapshotPacket', () => {
   it('round-trips with a single entity', () => {
     const packet: WorldSnapshotPacket = {
       serverTick: 100,
-      entities: [{ entityId: 7, x: 12.5, y: -3.25 }],
+      entities: [{ entityId: 7, x: 12.5, y: -3.25, speed: 200 }],
     };
     const result = roundTrip(packet);
     expect(result.serverTick).toBe(100);
@@ -29,6 +29,7 @@ describe('WorldSnapshotPacket', () => {
     expect(result.entities[0]!.entityId).toBe(7);
     expect(result.entities[0]!.x).toBeCloseTo(12.5, 5);
     expect(result.entities[0]!.y).toBeCloseTo(-3.25, 5);
+    expect(result.entities[0]!.speed).toBeCloseTo(200, 5);
   });
 
   it('round-trips with many entities preserving order', () => {
@@ -36,6 +37,7 @@ describe('WorldSnapshotPacket', () => {
       entityId: i,
       x: i * 1.5,
       y: -i * 0.5,
+      speed: i % 2 === 0 ? 200 : 350,
     }));
     const packet: WorldSnapshotPacket = { serverTick: 999, entities };
     const result = roundTrip(packet);
@@ -44,6 +46,7 @@ describe('WorldSnapshotPacket', () => {
       expect(entity.entityId).toBe(i);
       expect(entity.x).toBeCloseTo(i * 1.5, 4);
       expect(entity.y).toBeCloseTo(-i * 0.5, 4);
+      expect(entity.speed).toBeCloseTo(i % 2 === 0 ? 200 : 350, 4);
     });
   });
 
@@ -52,12 +55,14 @@ describe('WorldSnapshotPacket', () => {
       entityId: i,
       x: (Math.random() - 0.5) * 100000,
       y: (Math.random() - 0.5) * 100000,
+      speed: Math.random() * 500,
     }));
     const packet: WorldSnapshotPacket = { serverTick: 1, entities };
     const result = roundTrip(packet);
     result.entities.forEach((entity, i) => {
       expect(entity.x).toBeCloseTo(entities[i]!.x, 0);
       expect(entity.y).toBeCloseTo(entities[i]!.y, 0);
+      expect(entity.speed).toBeCloseTo(entities[i]!.speed, 0);
     });
   });
 });

@@ -13,6 +13,7 @@ import { buildTickPipeline } from './TickPipeline';
 import { NETWORK_SERVICE, CONNECTION_REGISTRY, PLAYER_REPOSITORY, EVENT_BUS } from './ServiceKeys';
 import type { DB } from '../database/types';
 import { boundsFromConfig, type WorldConfig } from '../world/WorldConfig';
+import { createWorldBoundaryWalls } from '../entities/WorldBoundaryFactory';
 
 const logger = new Logger('GameServer');
 
@@ -36,6 +37,10 @@ export class GameServer {
   ) {
     this.world = createServerWorld();
     const worldBounds = boundsFromConfig(this.worldConfig);
+    // World edges are ordinary static collision geometry, not a separate clamping system
+    // — see WorldBoundaryFactory. Created once here, not per-connection, since the
+    // boundary is shared world geometry.
+    createWorldBoundaryWalls(this.world, worldBounds);
 
     const playerRepository = new PlayerRepository(this.db);
     this.world.services.register(CONNECTION_REGISTRY, this.connectionRegistry);
@@ -51,7 +56,7 @@ export class GameServer {
     });
     this.world.services.register(NETWORK_SERVICE, this.gateway);
 
-    for (const system of buildTickPipeline(this.world.services, worldBounds)) {
+    for (const system of buildTickPipeline(this.world.services)) {
       this.world.registerSystem(system);
     }
 

@@ -2,6 +2,7 @@ import {
   System,
   VelocityComponent,
   PLAYER_MOVE_SPEED,
+  PLAYER_SPRINT_SPEED,
   type ComponentType,
   type World,
 } from '@starve/shared';
@@ -10,8 +11,11 @@ import type { ConnectionRegistry } from '../network/ConnectionRegistry';
 
 /**
  * Pipeline step 1 (Input): reads each connection's latest buffered PlayerInputPacket
- * and writes a normalized velocity onto that connection's entity. Stage 1 overwrites
- * rather than queues input — no replay/reconciliation yet.
+ * and writes a normalized velocity onto that connection's entity. Direct/instant —
+ * velocity snaps to full PLAYER_MOVE_SPEED (or PLAYER_SPRINT_SPEED while InputFlag.Sprint
+ * is held) in the input direction (or zero) rather than ramping via acceleration,
+ * matching the snappy, immediately-responsive movement feel this game wants. Stage 1
+ * overwrites rather than queues input — no replay/reconciliation yet.
  */
 export class InputApplicationSystem extends System {
   readonly query: ReadonlyArray<ComponentType> = [VelocityComponent];
@@ -47,8 +51,9 @@ export class InputApplicationSystem extends System {
         dy /= length;
       }
 
-      velocity.vx = dx * PLAYER_MOVE_SPEED;
-      velocity.vy = dy * PLAYER_MOVE_SPEED;
+      const speed = direction & InputFlag.Sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
+      velocity.vx = dx * speed;
+      velocity.vy = dy * speed;
     }
   }
 }

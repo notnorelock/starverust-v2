@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { World, ServiceContainer, PositionComponent } from '@starve/shared';
+import { World, ServiceContainer, PositionComponent, RenderPositionComponent, VelocityComponent } from '@starve/shared';
 import { decodeAny, finalizeForWire, Opcode } from '@starve/protocol';
 import { serializeWorldSnapshot } from './SnapshotSerializer';
 
@@ -38,5 +38,53 @@ describe('serializeWorldSnapshot', () => {
       throw new Error('unexpected opcode');
     }
     expect(decoded.packet.entities).toHaveLength(0);
+  });
+
+  it('broadcasts RenderPositionComponent instead of the raw PositionComponent target when both exist', () => {
+    const world = createWorld();
+    const entity = world.entities.createEntity();
+    world.entities.addComponent(entity.id, PositionComponent, new PositionComponent(entity.id, 100, 100));
+    world.entities.addComponent(
+      entity.id,
+      RenderPositionComponent,
+      new RenderPositionComponent(entity.id, 7, 3), // smoothed position, still trailing the target
+    );
+
+    const buffer = serializeWorldSnapshot(world, 0);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    expect(decoded.packet.entities[0]).toEqual({ entityId: entity.id, x: 7, y: 3, speed: 0 });
+  });
+
+  it('falls back to PositionComponent for entities with no RenderPositionComponent', () => {
+    const world = createWorld();
+    const entity = world.entities.createEntity();
+    world.entities.addComponent(entity.id, PositionComponent, new PositionComponent(entity.id, 42, -8));
+
+    const buffer = serializeWorldSnapshot(world, 0);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    expect(decoded.packet.entities[0]).toEqual({ entityId: entity.id, x: 42, y: -8, speed: 0 });
+  });
+
+  it('broadcasts VelocityComponent magnitude as speed', () => {
+    const world = createWorld();
+    const entity = world.entities.createEntity();
+    world.entities.addComponent(entity.id, PositionComponent, new PositionComponent(entity.id, 0, 0));
+    world.entities.addComponent(entity.id, VelocityComponent, new VelocityComponent(entity.id, 3, 4));
+
+    const buffer = serializeWorldSnapshot(world, 0);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    expect(decoded.packet.entities[0]!.speed).toBeCloseTo(5, 5); // 3-4-5 triangle
   });
 });
