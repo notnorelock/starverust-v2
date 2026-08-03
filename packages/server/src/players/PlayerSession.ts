@@ -15,6 +15,8 @@ import {
   encodeEntityInsert,
   encodeEntityDestroy,
   encodeConnectionRejected,
+  encodePlayerJoin,
+  encodePlayerLeft,
   type HelloPacket,
 } from '@starve/protocol';
 import type { ClientConnection } from '../network/ClientConnection';
@@ -51,21 +53,20 @@ export function isValidNickname(nickname: string): boolean {
  * named by the player instead of auto-generated), spawns the player's entity in the World,
  * and sends the Handshake packet assigning it.
  *
- * Entity lifecycle is explicit, not inferred from packet presence — see
- * EntityInsertPacket/EntityDestroyPacket. Two things follow from that here: the new
- * player's own entity is broadcast as an EntityInsert to every already-connected client
- * (they'd otherwise never learn about it until InterestManagementSystem's next tick
- * happened to put it in range, which isn't guaranteed the way "you always learn about
- * every entity that exists" was under the old broadcast-everything model), and the new
- * connection itself is sent an EntityInsert for every entity that already existed before
- * it connected (world geometry, other players) — it has no other way to learn about them
- * otherwise, since neither InterestManagementSystem's recurring EntityUpdatePacket nor a
- * one-time WorldSnapshotPacket carries entityType.
+ * Entity lifecycle (EntityInsertPacket/EntityDestroyPacket, any entity type) and player
+ * identity lifecycle (PlayerJoinPacket/PlayerLeftPacket, pid+nickname specifically) are
+ * two separate broadcasts, not folded into one — most entities (world geometry, future
+ * NPCs) have no nickname/pid at all, so EntityInsertPacket stays generic while
+ * PlayerJoinPacket carries the player-specific identity data on the side. The new player's
+ * own entity+identity are broadcast to every already-connected client (they'd otherwise
+ * never learn about it until InterestManagementSystem's next tick happened to put it in
+ * range), and the new connection itself is sent one of each for every entity/player that
+ * already existed before it connected — it has no other way to learn about them otherwise.
  *
- * WorldSnapshotPacket itself is sent once here, right after the EntityInsert catch-up
- * loop, carrying every existing entity's initial position/speed — this seeds the new
- * connection's client-side render state before its first (spatially-filtered, so possibly
- * sparse) EntityUpdatePacket arrives a tick later.
+ * WorldSnapshotPacket itself is sent once here, right after the catch-up loops, carrying
+ * every existing entity's initial position/speed — this seeds the new connection's
+ * client-side render state before its first (spatially-filtered, so possibly sparse)
+ * EntityUpdatePacket arrives a tick later.
  */
 export async function onHelloReceived(
   connection: ClientConnection,
@@ -106,6 +107,7 @@ export async function onHelloReceived(
   }
 
   const pid = connections.assignPid(connection);
+  connection.nickname = nickname;
 
   // Sent before this connection's own entity is created, so neither loop duplicates it.
   for (const entityId of world.entities.query(PositionComponent, EntityTypeComponent)) {
@@ -115,6 +117,12 @@ export async function onHelloReceived(
     connection.send(
       encodeEntityInsert({ entityId, entityType: entityType.entityType, ownerPid, x: position.x, y: position.y }),
     );
+  }
+  for (const other of connections.all()) {
+    if (other === connection || other.pid === undefined || other.entityId === undefined || !other.nickname) {
+      continue;
+    }
+    connection.send(encodePlayerJoin({ pid: other.pid, entityId: other.entityId, nickname: other.nickname }));
   }
   connection.send(serializeWorldSnapshot(world, 0));
 
@@ -142,6 +150,7 @@ export async function onHelloReceived(
       y: worldConfig.spawnY,
     }),
   );
+  network.broadcast(encodePlayerJoin({ pid, entityId, nickname }));
 
   logger.info(
     `Player session established: connection=${connection.connectionId} entity=${entityId} pid=${pid} nickname=${nickname}`,
@@ -152,5 +161,8 @@ export function onConnectionClosed(connection: ClientConnection, world: World, n
   if (connection.entityId !== undefined) {
     world.entities.destroyEntity(connection.entityId);
     network.broadcast(encodeEntityDestroy({ entityId: connection.entityId }));
+  }
+  if (connection.pid !== undefined) {
+    network.broadcast(encodePlayerLeft({ pid: connection.pid }));
   }
 }

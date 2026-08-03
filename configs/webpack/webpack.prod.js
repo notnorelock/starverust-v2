@@ -31,8 +31,13 @@ function createProdConfig(packageRoot) {
           terserOptions: {
             compress: {
               passes: 2,
+              toplevel: true,
               drop_console: false,
               drop_debugger: true,
+              join_vars: false,
+              hoist_funs: true,
+              hoist_vars: true,
+              hoist_props: true,
             },
             mangle: {
               toplevel: true,

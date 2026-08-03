@@ -25,28 +25,24 @@ function rejectionMessage(reason: RejectionReason): string {
   }
 }
 
+// Starts local simulation/rendering immediately — the canvas is live (an empty world,
+// camera at its default position) before the player has typed a nickname or a connection
+// has even been attempted. See ClientBootstrap's own doc comment for why start() and
+// connect() are split this way.
+const { connect } = bootstrapClient(appRoot);
+
 function showWelcomeOverlay(error?: string): void {
   const unmountOverlay = mountWelcomeOverlay(uiRoot, {
     error,
     onPlay: (nickname) => {
       unmountOverlay();
-      startGame(nickname);
+      connect(nickname, (reason) => {
+        // The render stack (canvas, world, camera) is untouched by a rejection — only the
+        // connection attempt failed, so just let the player retry with the overlay again.
+        showWelcomeOverlay(rejectionMessage(reason));
+      });
     },
   });
-}
-
-function startGame(nickname: string): void {
-  const client = bootstrapClient(appRoot, {
-    nickname,
-    onRejected: (reason) => {
-      // No player was ever created for a rejected connection — nothing to tear down on
-      // the ECS/render side, just stop this attempt and let the player try again.
-      client.stop();
-      appRoot.replaceChildren();
-      showWelcomeOverlay(rejectionMessage(reason));
-    },
-  });
-  client.start();
 }
 
 showWelcomeOverlay();

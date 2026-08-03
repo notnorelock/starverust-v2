@@ -3,6 +3,7 @@ export { RenderPositionComponent } from './RenderPositionComponent';
 export { EntityActionStateComponent, ActionState } from './EntityActionStateComponent';
 export { EntityTypeComponent, EntityType } from './EntityTypeComponent';
 export { EntityOwnerComponent } from './EntityOwnerComponent';
+export { AimComponent } from './AimComponent';
 export { VelocityComponent } from './VelocityComponent';
 export { PhysicsBodyComponent } from './PhysicsBodyComponent';
 export type { BodyType } from './PhysicsBodyComponent';

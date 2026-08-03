@@ -14,7 +14,10 @@ export enum InputFlag {
 
 /**
  * Client -> Server: current directional input state, sampled on the client's
- * fixed input-send interval (decoupled from render rate).
+ * fixed input-send interval (decoupled from render rate). Aim/facing angle is a separate
+ * packet (see PlayerAnglePacket) — it changes on its own mouse-driven schedule,
+ * independent of movement-key transitions, matching the reference implementation's own
+ * separate `send_angle()` from movement input.
  */
 export interface PlayerInputPacket {
   /** Client-local tick counter at time of sampling; reserved for future reconciliation. */

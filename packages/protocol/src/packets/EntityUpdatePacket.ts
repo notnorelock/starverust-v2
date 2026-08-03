@@ -25,9 +25,9 @@ export interface EntityUpdatePacket {
 // Payload layout:
 // [0..3] u32 serverTick
 // [4..5] u16 entityCount
-// repeated per entity (16 bytes): u32 entityId, f32 x, f32 y, f32 speed
+// repeated per entity (20 bytes): u32 entityId, f32 x, f32 y, f32 speed, f32 angle
 const HEADER_FIELDS_SIZE = 6;
-const ENTITY_RECORD_SIZE = 16;
+const ENTITY_RECORD_SIZE = 20;
 
 export function encodeEntityUpdate(packet: EntityUpdatePacket): ArrayBuffer {
   const payloadSize = HEADER_FIELDS_SIZE + packet.entities.length * ENTITY_RECORD_SIZE;
@@ -42,6 +42,7 @@ export function encodeEntityUpdate(packet: EntityUpdatePacket): ArrayBuffer {
     writeF32(entity.x);
     writeF32(entity.y);
     writeF32(entity.speed);
+    writeF32(entity.angle);
   }
 
   return endWrite();
@@ -57,7 +58,8 @@ export function decodeEntityUpdate(): EntityUpdatePacket {
     const x = readF32();
     const y = readF32();
     const speed = readF32();
-    entities.push({ entityId, x, y, speed });
+    const angle = readF32();
+    entities.push({ entityId, x, y, speed, angle });
   }
 
   return { serverTick, entities };

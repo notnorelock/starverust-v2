@@ -5,9 +5,11 @@ export interface DebugOverlayStats {
   serverTick: number;
   pingMs: number;
   entityCount: number;
+  /** The local player's current world position, for debugging camera follow/easing/bounds — undefined before it's known. */
+  playerPosition: { x: number; y: number } | undefined;
 }
 
-/** Small on-screen HUD showing live FPS/tick/ping — cheap now, reused by later debug tooling. */
+/** Small on-screen HUD showing live FPS/tick/ping/player-position — cheap now, reused by later debug tooling. */
 export class DebugOverlay {
   private readonly element: HTMLDivElement;
 
@@ -18,10 +20,12 @@ export class DebugOverlay {
   }
 
   update(stats: DebugOverlayStats): void {
+    const position = stats.playerPosition;
     this.element.textContent =
       `FPS: ${stats.fps.toFixed(0)}\n` +
       `Server Tick: ${stats.serverTick}\n` +
       `Ping: ${stats.pingMs.toFixed(0)}ms\n` +
-      `Entities: ${stats.entityCount}`;
+      `Entities: ${stats.entityCount}\n` +
+      `Player Pos: ${position ? `${position.x.toFixed(1)}, ${position.y.toFixed(1)}` : '—'}`;
   }
 }

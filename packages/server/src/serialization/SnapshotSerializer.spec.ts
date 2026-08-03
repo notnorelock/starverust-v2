@@ -8,6 +8,7 @@ import {
   EntityTypeComponent,
   EntityType,
   EntityOwnerComponent,
+  AimComponent,
 } from '@starve/shared';
 import { decodeAny, finalizeForWire, Opcode } from '@starve/protocol';
 import { serializeWorldSnapshot } from './SnapshotSerializer';
@@ -72,6 +73,7 @@ describe('serializeWorldSnapshot', () => {
       x: 7,
       y: 3,
       speed: 0,
+      angle: 0,
     });
   });
 
@@ -93,6 +95,7 @@ describe('serializeWorldSnapshot', () => {
       x: 42,
       y: -8,
       speed: 0,
+      angle: 0,
     });
   });
 
@@ -151,5 +154,26 @@ describe('serializeWorldSnapshot', () => {
     const unownedEntity = decoded.packet.entities.find((e) => e.entityId === unowned.id)!;
     expect(ownedEntity.ownerPid).toBe(5);
     expect(unownedEntity.ownerPid).toBe(0);
+  });
+
+  it('broadcasts angle from AimComponent, falling back to 0 when absent', () => {
+    const world = createWorld();
+    const aiming = world.entities.createEntity();
+    world.entities.addComponent(aiming.id, PositionComponent, new PositionComponent(aiming.id, 0, 0));
+    world.entities.addComponent(aiming.id, AimComponent, new AimComponent(aiming.id, Math.PI / 2));
+
+    const noAim = world.entities.createEntity();
+    world.entities.addComponent(noAim.id, PositionComponent, new PositionComponent(noAim.id, 0, 0));
+
+    const buffer = serializeWorldSnapshot(world, 0);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    const aimingEntity = decoded.packet.entities.find((e) => e.entityId === aiming.id)!;
+    const noAimEntity = decoded.packet.entities.find((e) => e.entityId === noAim.id)!;
+    expect(aimingEntity.angle).toBeCloseTo(Math.PI / 2, 5);
+    expect(noAimEntity.angle).toBe(0);
   });
 });

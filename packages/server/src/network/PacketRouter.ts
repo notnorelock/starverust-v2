@@ -35,6 +35,9 @@ export class PacketRouter {
         case Opcode.PlayerInput:
           connection.setLatestInput(decoded.packet);
           break;
+        case Opcode.PlayerAngle:
+          connection.setLatestAngle(decoded.packet);
+          break;
         default:
           logger.warn(`Received unexpected opcode from client: 0x${decoded.opcode.toString(16)}`);
       }

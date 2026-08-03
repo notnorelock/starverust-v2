@@ -42,3 +42,15 @@ export const RENDER_POSITION_CHASE_SPEED = 900;
  * the entity's currently-rendered position and its newly-received network position.
  */
 export const CLIENT_POSITION_SNAP_DISTANCE = 200;
+
+/**
+ * Base angular speed (radians/second) used to interpolate a rendered entity's facing angle
+ * toward its latest network-broadcast angle — see SnapshotBuffer's angle interpolation.
+ * Ported from the reference client's `WORLD.ROTATE` (value 10). Unlike position (which
+ * chases at a constant rate — see RENDER_POSITION_CHASE_SPEED), the actual per-frame turn
+ * rate the reference computes is this constant scaled by how much of the remaining half-
+ * turn (0..PI) is still left to close: `3 * (remaining / PI) * WORLD.ROTATE * dt` — see
+ * SnapshotBuffer's chaseAngleTowards() for the full port, including the shortest-direction
+ * wraparound logic (turning through 0/2*PI when that's the shorter way around).
+ */
+export const PLAYER_ROTATE_SPEED = 10;

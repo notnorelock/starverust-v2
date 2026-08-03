@@ -3,6 +3,7 @@ import {
   PositionComponent,
   RenderPositionComponent,
   VelocityComponent,
+  AimComponent,
   SpatialHashGrid,
   type ComponentType,
   type World,
@@ -89,7 +90,8 @@ export class InterestManagementSystem extends System {
         }
         const velocity = world.entities.getComponent(entityId, VelocityComponent)!;
         const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy);
-        entities.push({ entityId, x: position.x, y: position.y, speed });
+        const angle = world.entities.getComponent(entityId, AimComponent)?.angle ?? 0;
+        entities.push({ entityId, x: position.x, y: position.y, speed, angle });
       }
 
       connection.send(encodeEntityUpdate({ serverTick: this.tickCounter, entities }));

@@ -32,7 +32,7 @@ describe('KeyboardInputSource', () => {
     const win = new FakeWindow();
     source.attach(win as unknown as Window);
     const listener = vi.fn();
-    source.onDirectionChange(listener);
+    source.onChange(listener);
 
     win.dispatch('keydown', 'KeyW');
 
@@ -45,7 +45,7 @@ describe('KeyboardInputSource', () => {
     const win = new FakeWindow();
     source.attach(win as unknown as Window);
     const listener = vi.fn();
-    source.onDirectionChange(listener);
+    source.onChange(listener);
 
     win.dispatch('keydown', 'KeyW');
     win.dispatch('keydown', 'KeyW'); // browser key-repeat, same key still held
@@ -58,7 +58,7 @@ describe('KeyboardInputSource', () => {
     const win = new FakeWindow();
     source.attach(win as unknown as Window);
     const listener = vi.fn();
-    source.onDirectionChange(listener);
+    source.onChange(listener);
 
     win.dispatch('keydown', 'KeyW');
     win.dispatch('keyup', 'KeyW');
@@ -72,7 +72,7 @@ describe('KeyboardInputSource', () => {
     const win = new FakeWindow();
     source.attach(win as unknown as Window);
     const listener = vi.fn();
-    source.onDirectionChange(listener);
+    source.onChange(listener);
 
     win.dispatch('keydown', 'KeyW');
     win.dispatch('keydown', 'KeyD');
@@ -86,11 +86,24 @@ describe('KeyboardInputSource', () => {
     const win = new FakeWindow();
     source.attach(win as unknown as Window);
     const listener = vi.fn();
-    source.onDirectionChange(listener);
+    source.onChange(listener);
 
     win.dispatch('keydown', 'Space');
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('sample() reflects currently-held keys independent of onChange emissions', () => {
+    const source = new KeyboardInputSource();
+    const win = new FakeWindow();
+    source.attach(win as unknown as Window);
+
+    expect(source.sample()).toBe(0);
+
+    win.dispatch('keydown', 'KeyW');
+    win.dispatch('keydown', 'KeyD');
+
+    expect(source.sample()).toBe(InputFlag.Up | InputFlag.Right);
   });
 
   it('unsubscribing stops further notifications', () => {
@@ -98,7 +111,7 @@ describe('KeyboardInputSource', () => {
     const win = new FakeWindow();
     source.attach(win as unknown as Window);
     const listener = vi.fn();
-    const unsubscribe = source.onDirectionChange(listener);
+    const unsubscribe = source.onChange(listener);
 
     unsubscribe();
     win.dispatch('keydown', 'KeyW');

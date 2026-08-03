@@ -15,6 +15,14 @@ export interface EntitySnapshot {
    * fixed constant. See SnapshotBuffer's chase-and-snap smoothing.
    */
   speed: number;
+  /**
+   * Facing/aim angle in radians (see AimComponent, shared) — independent of the direction
+   * of travel `speed` implies, since a player can move one way while facing another
+   * (mouse-driven facing). Included here (not just on the one-time insert/snapshot
+   * packets) because, unlike entityType/ownerPid, it changes just as often as position
+   * while the player is actively aiming.
+   */
+  angle: number;
 }
 
 /**
@@ -51,9 +59,9 @@ export interface WorldSnapshotPacket {
 // Payload layout:
 // [0..3] u32 serverTick
 // [4..5] u16 entityCount
-// repeated per entity (21 bytes): u32 entityId, u8 entityType, u32 ownerPid, f32 x, f32 y, f32 speed
+// repeated per entity (25 bytes): u32 entityId, u8 entityType, u32 ownerPid, f32 x, f32 y, f32 speed, f32 angle
 const HEADER_FIELDS_SIZE = 6;
-const ENTITY_RECORD_SIZE = 21;
+const ENTITY_RECORD_SIZE = 25;
 
 export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
   const payloadSize = HEADER_FIELDS_SIZE + packet.entities.length * ENTITY_RECORD_SIZE;
@@ -70,6 +78,7 @@ export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
     writeF32(entity.x);
     writeF32(entity.y);
     writeF32(entity.speed);
+    writeF32(entity.angle);
   }
 
   return endWrite();
@@ -87,7 +96,8 @@ export function decodeWorldSnapshot(): WorldSnapshotPacket {
     const x = readF32();
     const y = readF32();
     const speed = readF32();
-    entities.push({ entityId, entityType, ownerPid, x, y, speed });
+    const angle = readF32();
+    entities.push({ entityId, entityType, ownerPid, x, y, speed, angle });
   }
 
   return { serverTick, entities };

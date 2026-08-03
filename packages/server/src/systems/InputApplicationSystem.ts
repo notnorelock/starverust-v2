@@ -1,6 +1,7 @@
 import {
   System,
   VelocityComponent,
+  AimComponent,
   PLAYER_MOVE_SPEED,
   PLAYER_SPRINT_SPEED,
   type ComponentType,
@@ -10,11 +11,17 @@ import { InputFlag } from '@starve/protocol';
 import type { ConnectionRegistry } from '../network/ConnectionRegistry';
 
 /**
- * Pipeline step 1 (Input): reads each connection's latest buffered PlayerInputPacket
- * and writes a normalized velocity onto that connection's entity. Direct/instant —
- * velocity snaps to full PLAYER_MOVE_SPEED (or PLAYER_SPRINT_SPEED while InputFlag.Sprint
- * is held) in the input direction (or zero) rather than ramping via acceleration,
- * matching the snappy, immediately-responsive movement feel this game wants. Stage 1
+ * Pipeline step 1 (Input): reads each connection's latest buffered PlayerInputPacket and
+ * PlayerAnglePacket and writes a normalized velocity plus a facing angle onto that
+ * connection's entity. Velocity is direct/instant — it snaps to full PLAYER_MOVE_SPEED (or
+ * PLAYER_SPRINT_SPEED while InputFlag.Sprint is held) in the input direction (or zero)
+ * rather than ramping via acceleration, matching the snappy, immediately-responsive
+ * movement feel this game wants. AimComponent.angle is written unconditionally from the
+ * latest PlayerAnglePacket every tick, independent of movement direction — a player can
+ * move one way while facing another (mouse-driven facing), matching the reference
+ * implementation's decoupled movement-keys/mouse-angle input model — and the two packets
+ * are buffered/read completely independently (see ClientConnection.getLatestInput() /
+ * getLatestAngle()) since they arrive on their own, uncorrelated schedules. Stage 1
  * overwrites rather than queues input — no replay/reconciliation yet.
  */
 export class InputApplicationSystem extends System {
@@ -54,6 +61,12 @@ export class InputApplicationSystem extends System {
       const speed = direction & InputFlag.Sprint ? PLAYER_SPRINT_SPEED : PLAYER_MOVE_SPEED;
       velocity.vx = dx * speed;
       velocity.vy = dy * speed;
+
+      const aim = world.entities.getComponent(connection.entityId, AimComponent);
+      const latestAngle = connection.getLatestAngle();
+      if (aim && latestAngle) {
+        aim.angle = latestAngle.angle;
+      }
     }
   }
 }

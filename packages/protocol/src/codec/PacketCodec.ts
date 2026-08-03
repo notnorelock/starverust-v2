@@ -3,23 +3,29 @@ import { readHeader } from '../io/PacketHeader';
 import { Opcode } from '../opcodes';
 import { decodeHandshake, type HandshakePacket } from '../packets/HandshakePacket';
 import { decodePlayerInput, type PlayerInputPacket } from '../packets/PlayerInputPacket';
+import { decodePlayerAngle, type PlayerAnglePacket } from '../packets/PlayerAnglePacket';
 import { decodeWorldSnapshot, type WorldSnapshotPacket } from '../packets/WorldSnapshotPacket';
 import { decodeEntityInsert, type EntityInsertPacket } from '../packets/EntityInsertPacket';
 import { decodeEntityDestroy, type EntityDestroyPacket } from '../packets/EntityDestroyPacket';
 import { decodeEntityUpdate, type EntityUpdatePacket } from '../packets/EntityUpdatePacket';
 import { decodeHello, type HelloPacket } from '../packets/HelloPacket';
 import { decodeConnectionRejected, type ConnectionRejectedPacket } from '../packets/ConnectionRejectedPacket';
+import { decodePlayerJoin, type PlayerJoinPacket } from '../packets/PlayerJoinPacket';
+import { decodePlayerLeft, type PlayerLeftPacket } from '../packets/PlayerLeftPacket';
 import { protect, unprotect } from '../security/PacketFraming';
 
 export type DecodedPacket =
   | { opcode: Opcode.Handshake; packet: HandshakePacket }
   | { opcode: Opcode.PlayerInput; packet: PlayerInputPacket }
+  | { opcode: Opcode.PlayerAngle; packet: PlayerAnglePacket }
   | { opcode: Opcode.WorldSnapshot; packet: WorldSnapshotPacket }
   | { opcode: Opcode.EntityInsert; packet: EntityInsertPacket }
   | { opcode: Opcode.EntityDestroy; packet: EntityDestroyPacket }
   | { opcode: Opcode.EntityUpdate; packet: EntityUpdatePacket }
   | { opcode: Opcode.Hello; packet: HelloPacket }
-  | { opcode: Opcode.ConnectionRejected; packet: ConnectionRejectedPacket };
+  | { opcode: Opcode.ConnectionRejected; packet: ConnectionRejectedPacket }
+  | { opcode: Opcode.PlayerJoin; packet: PlayerJoinPacket }
+  | { opcode: Opcode.PlayerLeft; packet: PlayerLeftPacket };
 
 /** Thrown when a buffer's opcode has no registered decoder. */
 export class UnknownOpcodeError extends Error {
@@ -61,6 +67,8 @@ export function decodeAny(wire: ArrayBuffer | Uint8Array): DecodedPacket {
         return { opcode: Opcode.Handshake, packet: decodeHandshake() };
       case Opcode.PlayerInput:
         return { opcode: Opcode.PlayerInput, packet: decodePlayerInput() };
+      case Opcode.PlayerAngle:
+        return { opcode: Opcode.PlayerAngle, packet: decodePlayerAngle() };
       case Opcode.WorldSnapshot:
         return { opcode: Opcode.WorldSnapshot, packet: decodeWorldSnapshot() };
       case Opcode.EntityInsert:
@@ -73,6 +81,10 @@ export function decodeAny(wire: ArrayBuffer | Uint8Array): DecodedPacket {
         return { opcode: Opcode.Hello, packet: decodeHello() };
       case Opcode.ConnectionRejected:
         return { opcode: Opcode.ConnectionRejected, packet: decodeConnectionRejected() };
+      case Opcode.PlayerJoin:
+        return { opcode: Opcode.PlayerJoin, packet: decodePlayerJoin() };
+      case Opcode.PlayerLeft:
+        return { opcode: Opcode.PlayerLeft, packet: decodePlayerLeft() };
       default:
         throw new UnknownOpcodeError(header.opcode);
     }

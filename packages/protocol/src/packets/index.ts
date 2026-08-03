@@ -1,6 +1,9 @@
 export type { PlayerInputPacket } from './PlayerInputPacket';
 export { InputFlag, encodePlayerInput, decodePlayerInput } from './PlayerInputPacket';
 
+export type { PlayerAnglePacket } from './PlayerAnglePacket';
+export { encodePlayerAngle, decodePlayerAngle } from './PlayerAnglePacket';
+
 export type { WorldSnapshotPacket, WorldSnapshotEntity, EntitySnapshot } from './WorldSnapshotPacket';
 export { encodeWorldSnapshot, decodeWorldSnapshot } from './WorldSnapshotPacket';
 
@@ -21,3 +24,9 @@ export { encodeEntityDestroy, decodeEntityDestroy } from './EntityDestroyPacket'
 
 export type { EntityUpdatePacket } from './EntityUpdatePacket';
 export { encodeEntityUpdate, decodeEntityUpdate } from './EntityUpdatePacket';
+
+export type { PlayerJoinPacket } from './PlayerJoinPacket';
+export { encodePlayerJoin, decodePlayerJoin } from './PlayerJoinPacket';
+
+export type { PlayerLeftPacket } from './PlayerLeftPacket';
+export { encodePlayerLeft, decodePlayerLeft } from './PlayerLeftPacket';

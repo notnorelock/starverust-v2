@@ -48,10 +48,30 @@ export class Camera2D {
     this.bounds = bounds;
   }
 
-  /** Sets the world-space point the camera eases toward; call once per frame with the latest target. */
+  /**
+   * Sets the world-space point the camera eases toward; call once per frame with the
+   * latest target. Clamped to keep the *viewport's edges* inside world bounds, not just
+   * the followed point itself — worldToScreen() centers the viewport on the camera's
+   * position, so clamping the raw target to [minX, maxX] would let the camera center sit
+   * exactly on the world edge and show half a viewport's worth of empty space beyond it
+   * whenever the player stands near a boundary. Subtracting half the viewport size (scaled
+   * by zoom, since a larger zoom shows less world per screen pixel) from each side is the
+   * fix — ported conceptually from the reference client's own camera clamp
+   * (`x - this.rw / 2`, `world.w - this.rw`), which bakes in the same half-viewport margin
+   * for the same reason, just against its own cam.x-is-a-translation-offset convention
+   * instead of this class's cam.x-is-the-centered-world-position one.
+   *
+   * Degenerates to no clamping (matches the old behavior) when bounds are ±Infinity (see
+   * UNBOUNDED) or the world is smaller than the viewport itself, in which case min > max
+   * and MathUtils.clamp would otherwise pin the camera to the (wrong) lower bound — the
+   * clamp is skipped instead so the camera just centers on the raw target.
+   */
   follow(worldX: number, worldY: number): void {
-    const clampedX = MathUtils.clamp(worldX, this.bounds.minX, this.bounds.maxX);
-    const clampedY = MathUtils.clamp(worldY, this.bounds.minY, this.bounds.maxY);
+    const halfWidth = this.viewportWidth / 2 / this.zoom;
+    const halfHeight = this.viewportHeight / 2 / this.zoom;
+
+    const clampedX = clampToViewport(worldX, this.bounds.minX, this.bounds.maxX, halfWidth);
+    const clampedY = clampToViewport(worldY, this.bounds.minY, this.bounds.maxY, halfHeight);
     this.ease.setTarget(clampedX, clampedY);
   }
 
@@ -66,4 +86,20 @@ export class Camera2D {
       y: (worldY - this.y) * this.zoom + this.viewportHeight / 2,
     };
   }
+}
+
+/**
+ * Clamps `value` so a viewport extending `halfExtent` on either side of it never crosses
+ * [min, max] — i.e. clamps to [min + halfExtent, max - halfExtent], not [min, max]
+ * directly. Falls back to the simple [min, max] clamp when the world is narrower than the
+ * viewport itself (min + halfExtent > max - halfExtent) rather than producing an inverted
+ * range, which would otherwise pin the camera to the wrong side.
+ */
+function clampToViewport(value: number, min: number, max: number, halfExtent: number): number {
+  const lower = min + halfExtent;
+  const upper = max - halfExtent;
+  if (lower > upper) {
+    return MathUtils.clamp(value, min, max);
+  }
+  return MathUtils.clamp(value, lower, upper);
 }

@@ -5,6 +5,7 @@ import {
   EntityTypeComponent,
   EntityType,
   EntityOwnerComponent,
+  AimComponent,
   VelocityComponent,
   PhysicsBodyComponent,
   CircleColliderComponent,
@@ -42,6 +43,7 @@ export function createPlayerEntity(world: World, spawnX: number, spawnY: number,
     new EntityTypeComponent(entity.id, EntityType.Player),
   );
   world.entities.addComponent(entity.id, EntityOwnerComponent, new EntityOwnerComponent(entity.id, ownerPid));
+  world.entities.addComponent(entity.id, AimComponent, new AimComponent(entity.id));
   world.entities.addComponent(entity.id, VelocityComponent, new VelocityComponent(entity.id, 0, 0));
   world.entities.addComponent(
     entity.id,

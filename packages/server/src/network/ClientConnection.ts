@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from 'bun';
 import type { EntityId } from '@starve/shared';
-import { finalizeForWire, type PlayerInputPacket } from '@starve/protocol';
+import { finalizeForWire, type PlayerInputPacket, type PlayerAnglePacket } from '@starve/protocol';
 
 export interface ConnectionSocketData {
   connectionId: number;
@@ -28,7 +28,17 @@ export class ClientConnection {
    * world); pid is deliberately its own namespace for "which player."
    */
   public pid: number | undefined;
+  /** Set alongside pid, once Hello validation passes — see PlayerSession.onHelloReceived. */
+  public nickname: string | undefined;
   private latestInput: PlayerInputPacket | undefined;
+  /**
+   * Latest received PlayerAnglePacket — buffered the same way latestInput is (persists
+   * across ticks rather than being cleared after one read) and for the same reason: the
+   * client only sends a new one when the mouse-driven angle actually changes by more than
+   * MouseAngleInputSource's epsilon, not on a fixed timer, so InputApplicationSystem must
+   * keep re-applying the last-known angle every tick between updates.
+   */
+  private latestAngle: PlayerAnglePacket | undefined;
 
   constructor(
     public readonly connectionId: number,
@@ -61,5 +71,13 @@ export class ClientConnection {
 
   getLatestInput(): PlayerInputPacket | undefined {
     return this.latestInput;
+  }
+
+  setLatestAngle(angle: PlayerAnglePacket): void {
+    this.latestAngle = angle;
+  }
+
+  getLatestAngle(): PlayerAnglePacket | undefined {
+    return this.latestAngle;
   }
 }

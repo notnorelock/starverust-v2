@@ -1,5 +1,5 @@
 import type { WorldSnapshotPacket, EntityUpdatePacket } from '@starve/protocol';
-import { PLAYER_MOVE_SPEED, CLIENT_POSITION_SNAP_DISTANCE } from '@starve/shared';
+import { PLAYER_MOVE_SPEED, PLAYER_ROTATE_SPEED, CLIENT_POSITION_SNAP_DISTANCE } from '@starve/shared';
 
 /**
  * Floor applied to an entity's broadcast speed when computing its chase step — guarantees
@@ -9,6 +9,8 @@ import { PLAYER_MOVE_SPEED, CLIENT_POSITION_SNAP_DISTANCE } from '@starve/shared
  */
 const MIN_CHASE_SPEED = PLAYER_MOVE_SPEED;
 
+const TAU = Math.PI * 2;
+
 interface RenderedEntity {
   x: number;
   y: number;
@@ -16,12 +18,17 @@ interface RenderedEntity {
   r: { x: number; y: number };
   /** This entity's broadcast speed (world units/second) — see EntitySnapshot.speed. */
   speed: number;
+  /** Currently-rendered facing angle (radians) — chases `rAngle`, see chaseAngleTowards(). */
+  angle: number;
+  /** Latest known network-broadcast facing angle (radians) — see EntitySnapshot.angle. */
+  rAngle: number;
 }
 
 export interface InterpolatedEntity {
   entityId: number;
   x: number;
   y: number;
+  angle: number;
 }
 
 /**
@@ -45,6 +52,12 @@ export interface InterpolatedEntity {
  * straight there too instead of chasing — this is what the reference's own
  * `CLIENT.LAG_DISTANCE` check on `pid != 0` entities exists for: a teleport/respawn should
  * not visibly slide across the map at movement speed.
+ *
+ * `angle` is interpolated the same "chase a network target" way, but with its own
+ * shape — see chaseAngleTowards() — ported from `move_units()`'s own angle-update block
+ * (`b.angle`/`b.nangle`, distinct from its position `b.x`/`b.r.x` handling): the turn rate
+ * is proportional to the remaining angular distance rather than constant, and it always
+ * turns the shorter way around the circle (handling the 0/2*PI wraparound seam).
  *
  * Isolated from RenderSystem/NetworkClient so a future client-prediction stage can extend
  * or replace the smoothing strategy without touching rendering or transport code.
@@ -73,6 +86,8 @@ export class SnapshotBuffer {
         y: target.y,
         r: { x: target.x, y: target.y },
         speed: target.speed,
+        angle: target.angle,
+        rAngle: target.angle,
       });
     }
   }
@@ -92,6 +107,8 @@ export class SnapshotBuffer {
           y: target.y,
           r: { x: target.x, y: target.y },
           speed: target.speed,
+          angle: target.angle,
+          rAngle: target.angle,
         });
         continue;
       }
@@ -99,6 +116,7 @@ export class SnapshotBuffer {
       render.r.x = target.x;
       render.r.y = target.y;
       render.speed = target.speed;
+      render.rAngle = target.angle;
 
       const dx = target.x - render.x;
       const dy = target.y - render.y;
@@ -111,9 +129,10 @@ export class SnapshotBuffer {
 
   /**
    * Advances every known entity's rendered position toward its latest network position by
-   * that entity's own broadcast speed * dt, snapping once within one step of it, and
-   * returns the resulting positions. `dt` is the frame's delta time in seconds (rAF is
-   * variable rate, so this must be measured per call rather than assumed constant).
+   * that entity's own broadcast speed * dt, snapping once within one step of it, and its
+   * rendered angle toward its latest network angle (see chaseAngleTowards()). Returns the
+   * resulting positions/angles. `dt` is the frame's delta time in seconds (rAF is variable
+   * rate, so this must be measured per call rather than assumed constant).
    */
   sample(dt: number): InterpolatedEntity[] {
     const result: InterpolatedEntity[] = [];
@@ -121,7 +140,8 @@ export class SnapshotBuffer {
     for (const [entityId, render] of this.rendered) {
       const step = Math.max(render.speed, MIN_CHASE_SPEED) * dt;
       chaseTowards(render, step);
-      result.push({ entityId, x: render.x, y: render.y });
+      chaseAngleTowards(render, dt);
+      result.push({ entityId, x: render.x, y: render.y, angle: render.angle });
     }
 
     return result;
@@ -140,7 +160,7 @@ export class SnapshotBuffer {
    */
   latestRawPosition(entityId: number): InterpolatedEntity | undefined {
     const render = this.rendered.get(entityId);
-    return render ? { entityId, x: render.r.x, y: render.r.y } : undefined;
+    return render ? { entityId, x: render.r.x, y: render.r.y, angle: render.rAngle } : undefined;
   }
 
   /**
@@ -168,5 +188,54 @@ function chaseTowards(render: RenderedEntity, step: number): void {
   } else {
     render.x += (dx / distance) * step;
     render.y += (dy / distance) * step;
+  }
+}
+
+/**
+ * Turns `render.angle` toward `render.rAngle` — ported from the reference client's
+ * `move_units()` angle-update block. Two things distinguish this from a plain lerp:
+ *
+ * 1. Turn rate is proportional to the remaining angular distance (`min`, always in
+ *    [0, PI] — the *shorter* way around the circle), not constant: `3 * (min / PI) *
+ *    PLAYER_ROTATE_SPEED * dt`. A near-180-degree turn rotates at full speed; a small
+ *    correction rotates slowly, which reads as a settling/easing motion rather than a
+ *    mechanical constant-speed sweep.
+ * 2. It always turns the shorter way around the 0/2*PI seam — e.g. going from 350 degrees
+ *    to 10 degrees turns forward through 0 (a 20-degree turn), not backward through 180
+ *    degrees, by working with the raw (possibly >PI or <-PI) difference and picking the
+ *    turn direction from which side of +-PI it falls on.
+ */
+function chaseAngleTowards(render: RenderedEntity, dt: number): void {
+  if (render.angle === render.rAngle) {
+    return;
+  }
+
+  render.angle = ((render.angle % TAU) + TAU) % TAU;
+  render.rAngle = ((render.rAngle % TAU) + TAU) % TAU;
+  if (render.angle === render.rAngle) {
+    return;
+  }
+
+  const diff = render.rAngle - render.angle;
+  let remaining = Math.abs(diff);
+  if (remaining > Math.PI) {
+    remaining = TAU - remaining;
+  }
+
+  const step = 3 * (remaining / Math.PI) * PLAYER_ROTATE_SPEED * dt;
+
+  if (diff > Math.PI) {
+    render.angle -= step;
+  } else if (diff < -Math.PI) {
+    render.angle += step;
+  } else if (diff < 0) {
+    render.angle -= step;
+  } else {
+    render.angle += step;
+  }
+
+  render.angle = ((render.angle % TAU) + TAU) % TAU;
+  if (Math.abs(render.angle - render.rAngle) < step) {
+    render.angle = render.rAngle;
   }
 }

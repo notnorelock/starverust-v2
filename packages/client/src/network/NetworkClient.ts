@@ -7,7 +7,6 @@ const logger = new Logger('NetworkClient');
 export interface NetworkClientOptions {
   url: string;
   handlers: PacketHandlerRegistry;
-  onOpen?: () => void;
   onClose?: () => void;
 }
 
@@ -17,13 +16,21 @@ export class NetworkClient {
 
   constructor(private readonly options: NetworkClientOptions) {}
 
-  connect(): void {
+  /**
+   * Opens the socket. `onOpen` is a call-time parameter (not a construction-time option)
+   * because the caller may not know everything it needs to send on open (e.g. the
+   * player's nickname for HelloPacket) until later than NetworkClient itself is
+   * constructed — see ClientBootstrap, where the render stack is built and started well
+   * before a nickname exists, and connect() is only called once the welcome overlay
+   * collects one.
+   */
+  connect(onOpen?: () => void): void {
     const socket = new WebSocket(this.options.url);
     socket.binaryType = 'arraybuffer';
 
     socket.addEventListener('open', () => {
       logger.info('Connected');
-      this.options.onOpen?.();
+      onOpen?.();
     });
 
     socket.addEventListener('message', (event) => {
