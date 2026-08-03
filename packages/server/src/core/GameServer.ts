@@ -91,10 +91,11 @@ export class GameServer {
       this.config.tickRate,
       this.worldConfig,
       worldBounds,
+      this.gateway,
     );
   }
 
   private handleDisconnect(connection: ClientConnection): void {
-    onConnectionClosed(connection, this.world);
+    onConnectionClosed(connection, this.world, this.gateway);
   }
 }

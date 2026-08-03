@@ -10,6 +10,8 @@ import {
   PhysicsBodyComponent,
   CircleColliderComponent,
   RectColliderComponent,
+  EntityTypeComponent,
+  EntityType,
   CollisionLayer,
 } from '@starve/shared';
 import { createWorldBoundaryWalls } from './WorldBoundaryFactory';
@@ -55,6 +57,8 @@ describe('createWorldBoundaryWalls', () => {
       expect(collider.layer).toBe(CollisionLayer.World);
       const body = world.entities.getComponent(id, PhysicsBodyComponent)!;
       expect(body.bodyType).toBe('static');
+      const entityType = world.entities.getComponent(id, EntityTypeComponent)!;
+      expect(entityType.entityType).toBe(EntityType.WorldGeometry);
     }
   });
 

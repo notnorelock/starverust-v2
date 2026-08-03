@@ -4,12 +4,16 @@ import { Opcode } from '../opcodes';
 import { decodeHandshake, type HandshakePacket } from '../packets/HandshakePacket';
 import { decodePlayerInput, type PlayerInputPacket } from '../packets/PlayerInputPacket';
 import { decodeWorldSnapshot, type WorldSnapshotPacket } from '../packets/WorldSnapshotPacket';
+import { decodeEntityInsert, type EntityInsertPacket } from '../packets/EntityInsertPacket';
+import { decodeEntityDestroy, type EntityDestroyPacket } from '../packets/EntityDestroyPacket';
 import { protect, unprotect } from '../security/PacketFraming';
 
 export type DecodedPacket =
   | { opcode: Opcode.Handshake; packet: HandshakePacket }
   | { opcode: Opcode.PlayerInput; packet: PlayerInputPacket }
-  | { opcode: Opcode.WorldSnapshot; packet: WorldSnapshotPacket };
+  | { opcode: Opcode.WorldSnapshot; packet: WorldSnapshotPacket }
+  | { opcode: Opcode.EntityInsert; packet: EntityInsertPacket }
+  | { opcode: Opcode.EntityDestroy; packet: EntityDestroyPacket };
 
 /** Thrown when a buffer's opcode has no registered decoder. */
 export class UnknownOpcodeError extends Error {
@@ -53,6 +57,10 @@ export function decodeAny(wire: ArrayBuffer | Uint8Array): DecodedPacket {
         return { opcode: Opcode.PlayerInput, packet: decodePlayerInput() };
       case Opcode.WorldSnapshot:
         return { opcode: Opcode.WorldSnapshot, packet: decodeWorldSnapshot() };
+      case Opcode.EntityInsert:
+        return { opcode: Opcode.EntityInsert, packet: decodeEntityInsert() };
+      case Opcode.EntityDestroy:
+        return { opcode: Opcode.EntityDestroy, packet: decodeEntityDestroy() };
       default:
         throw new UnknownOpcodeError(header.opcode);
     }

@@ -118,6 +118,16 @@ export class SnapshotBuffer {
     const entity = this.latest?.entities.find((e) => e.entityId === entityId);
     return entity ? { entityId, x: entity.x, y: entity.y } : undefined;
   }
+
+  /**
+   * Drops an entity's render state immediately on EntityDestroyPacket, rather than waiting
+   * for it to fall out of the next WorldSnapshotPacket via pruneStaleEntities() — the two
+   * are redundant in the common case (both eventually agree the entity is gone) but this
+   * makes cleanup happen the instant the server says so instead of up to one tick later.
+   */
+  remove(entityId: number): void {
+    this.rendered.delete(entityId);
+  }
 }
 
 function chaseTowards(render: RenderedEntity, step: number): void {

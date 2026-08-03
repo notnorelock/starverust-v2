@@ -56,5 +56,16 @@ export function bootstrapClient(mountPoint: HTMLElement): GameClient {
     gameClient.onServerTick(packet.serverTick);
   });
 
+  // EntityInsert only needs to be observed here for entities the client hasn't seen yet
+  // via WorldSnapshot — RenderSystem.ensureInterpolatedEntity() already lazily spawns the
+  // client-side entity/components the first time an id shows up in a snapshot, so there's
+  // nothing further to do for that case. What EntityInsert *does* provide that snapshots
+  // never will is entityType, learned once per entity — no consumer needs it yet (Stage 1
+  // only ever draws a circle either way), but the wire format is here for when one does.
+  handlers.on(Opcode.EntityDestroy, (packet) => {
+    world.entities.destroyEntity(packet.entityId);
+    snapshotBuffer.remove(packet.entityId);
+  });
+
   return gameClient;
 }
