@@ -1,0 +1,35 @@
+@reference "../styles/tailwind.css";
+
+.overlay {
+  @apply fixed inset-0 flex items-center justify-center bg-neutral-950/90 backdrop-blur-sm;
+}
+
+.card {
+  @apply flex w-80 flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-xl;
+}
+
+.title {
+  @apply text-2xl font-bold tracking-tight text-neutral-50;
+}
+
+.subtitle {
+  @apply -mt-2 mb-2 text-sm text-neutral-400;
+}
+
+.label {
+  @apply text-xs font-medium uppercase tracking-wide text-neutral-400;
+}
+
+.input {
+  @apply rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-50 outline-none;
+  @apply focus:border-emerald-500;
+}
+
+.error {
+  @apply -mt-1 text-sm text-red-400;
+}
+
+.playButton {
+  @apply mt-2 rounded-md bg-emerald-500 px-4 py-2 font-semibold text-neutral-950 transition-colors;
+  @apply hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400;
+}

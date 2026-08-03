@@ -20,14 +20,14 @@ describe('SnapshotBuffer', () => {
   describe('seed()', () => {
     it('initializes render state exactly at the given position for each entity', () => {
       const buffer = new SnapshotBuffer();
-      buffer.seed(snapshot([{ entityId: 1, entityType: 0, x: 5, y: 5, speed: PLAYER_MOVE_SPEED }]));
+      buffer.seed(snapshot([{ entityId: 1, entityType: 0, ownerPid: 0, x: 5, y: 5, speed: PLAYER_MOVE_SPEED }]));
       expect(buffer.sample(1 / 60)).toEqual([{ entityId: 1, x: 5, y: 5 }]);
     });
 
     it('does not overwrite an entity that already has render state (e.g. from an EntityUpdatePacket that arrived first)', () => {
       const buffer = new SnapshotBuffer();
       buffer.push(update(1, [{ entityId: 1, x: 50, y: 50, speed: PLAYER_MOVE_SPEED }]));
-      buffer.seed(snapshot([{ entityId: 1, entityType: 0, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
+      buffer.seed(snapshot([{ entityId: 1, entityType: 0, ownerPid: 0, x: 0, y: 0, speed: PLAYER_MOVE_SPEED }]));
 
       expect(buffer.sample(1 / 60)).toEqual([{ entityId: 1, x: 50, y: 50 }]);
     });

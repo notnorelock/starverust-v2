@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@starve/protocol": "workspace:*",
-    "@starve/shared": "workspace:*"
+    "@starve/shared": "workspace:*",
+    "@starve/ui": "workspace:*"
   }
 }

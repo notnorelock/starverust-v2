@@ -4,6 +4,7 @@ import {
   EntityActionStateComponent,
   EntityTypeComponent,
   EntityType,
+  EntityOwnerComponent,
   VelocityComponent,
   PhysicsBodyComponent,
   CircleColliderComponent,
@@ -15,8 +16,13 @@ import {
 /** Player collision radius, in world units — matches the client's rendered circle radius. */
 const PLAYER_COLLIDER_RADIUS = 0.5;
 
-/** Creates the entity + component set backing a connected player, spawned at the world's configured spawn point. */
-export function createPlayerEntity(world: World, spawnX: number, spawnY: number): EntityId {
+/**
+ * Creates the entity + component set backing a connected player, spawned at the world's
+ * configured spawn point. `ownerPid` is the connection's own pid (see ClientConnection.pid
+ * / ConnectionRegistry.assignPid), assigned before this is called — a player entity is
+ * owned by its own player's pid.
+ */
+export function createPlayerEntity(world: World, spawnX: number, spawnY: number, ownerPid: number): EntityId {
   const entity = world.entities.createEntity();
   world.entities.addComponent(entity.id, PositionComponent, new PositionComponent(entity.id, spawnX, spawnY));
   // Seeded at the spawn point up front (rather than left for PositionSmoothingSystem's
@@ -35,6 +41,7 @@ export function createPlayerEntity(world: World, spawnX: number, spawnY: number)
     EntityTypeComponent,
     new EntityTypeComponent(entity.id, EntityType.Player),
   );
+  world.entities.addComponent(entity.id, EntityOwnerComponent, new EntityOwnerComponent(entity.id, ownerPid));
   world.entities.addComponent(entity.id, VelocityComponent, new VelocityComponent(entity.id, 0, 0));
   world.entities.addComponent(
     entity.id,

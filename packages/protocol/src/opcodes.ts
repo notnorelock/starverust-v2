@@ -10,7 +10,9 @@
  * 0x50-0x5F  chat              (future stage)
  */
 export enum Opcode {
+  Hello = 0x00,
   Handshake = 0x01,
+  ConnectionRejected = 0x02,
   PlayerInput = 0x10,
   WorldSnapshot = 0x20,
   EntityInsert = 0x21,

@@ -14,9 +14,10 @@ function roundTrip(packet: HandshakePacket): HandshakePacket {
 }
 
 describe('HandshakePacket', () => {
-  it('round-trips assignedEntityId, tickRate, and world bounds', () => {
+  it('round-trips assignedEntityId, assignedPid, tickRate, and world bounds', () => {
     const packet: HandshakePacket = {
       assignedEntityId: 7,
+      assignedPid: 3,
       tickRate: 30,
       worldMinX: -25,
       worldMaxX: 25,
@@ -25,6 +26,7 @@ describe('HandshakePacket', () => {
     };
     const result = roundTrip(packet);
     expect(result.assignedEntityId).toBe(7);
+    expect(result.assignedPid).toBe(3);
     expect(result.tickRate).toBe(30);
     expect(result.worldMinX).toBeCloseTo(-25, 5);
     expect(result.worldMaxX).toBeCloseTo(25, 5);
@@ -35,6 +37,7 @@ describe('HandshakePacket', () => {
   it('round-trips a non-square, non-centered world', () => {
     const packet: HandshakePacket = {
       assignedEntityId: 1,
+      assignedPid: 1,
       tickRate: 20,
       worldMinX: -10,
       worldMaxX: 200,
@@ -51,6 +54,7 @@ describe('HandshakePacket', () => {
   it('produces a header with the correct opcode and payload length', () => {
     const buffer = encodeHandshake({
       assignedEntityId: 0,
+      assignedPid: 0,
       tickRate: 0,
       worldMinX: 0,
       worldMaxX: 0,
@@ -61,6 +65,6 @@ describe('HandshakePacket', () => {
     const header = readHeader();
     endRead();
     expect(header.opcode).toBe(Opcode.Handshake);
-    expect(header.length).toBe(22);
+    expect(header.length).toBe(26);
   });
 });

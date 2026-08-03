@@ -1,4 +1,4 @@
-import { Opcode } from '@starve/protocol';
+import { Opcode, PROTOCOL_VERSION, encodeHello, type RejectionReason } from '@starve/protocol';
 import { EntityType } from '@starve/shared';
 import { createClientWorld } from '../world/ClientWorldFactory';
 import { CanvasContext2DProvider } from '../render/CanvasContext2DProvider';
@@ -19,7 +19,26 @@ function resolveWebSocketUrl(): string {
   return `${protocol}//${window.location.hostname}:8081`;
 }
 
-export function bootstrapClient(mountPoint: HTMLElement): GameClient {
+export interface BootstrapClientOptions {
+  /** The player's chosen nickname, collected by the welcome overlay before this is called. */
+  nickname: string;
+  /**
+   * Invoked if the server refuses the connection (protocol version mismatch or invalid
+   * nickname — see RejectionReason) instead of ever sending a Handshake. The caller (see
+   * client/src/index.ts) is expected to tear this bootstrap down and show the reason in
+   * the welcome overlay again, since there is no game to run without an assigned entity.
+   */
+  onRejected: (reason: RejectionReason) => void;
+}
+
+/**
+ * Wires up the full client stack and opens the connection. HelloPacket (carrying
+ * PROTOCOL_VERSION and the player's nickname) is sent the instant the socket opens — the
+ * server creates no player entity and sends nothing back until it arrives (see
+ * PlayerSession.onHelloReceived) — so nothing here can render a real entity before
+ * Handshake arrives regardless of when GameClient.start() happens to run.
+ */
+export function bootstrapClient(mountPoint: HTMLElement, options: BootstrapClientOptions): GameClient {
   const world = createClientWorld();
 
   const canvasProvider = new CanvasContext2DProvider(mountPoint);
@@ -36,13 +55,23 @@ export function bootstrapClient(mountPoint: HTMLElement): GameClient {
   world.registerSystem(renderSystem);
 
   const handlers = new PacketHandlerRegistry();
-  const networkClient = new NetworkClient({ url: resolveWebSocketUrl(), handlers });
+  const networkClient = new NetworkClient({
+    url: resolveWebSocketUrl(),
+    handlers,
+    onOpen: () => {
+      networkClient.send(encodeHello({ protocolVersion: PROTOCOL_VERSION, nickname: options.nickname }));
+    },
+  });
   world.services.register(NETWORK_CLIENT, networkClient);
 
   const inputSource = new KeyboardInputSource();
   const debugOverlay = new DebugOverlay(mountPoint);
 
   const gameClient = new GameClient(world, networkClient, inputSource, snapshotBuffer, debugOverlay);
+
+  handlers.on(Opcode.ConnectionRejected, (packet) => {
+    options.onRejected(packet.reason);
+  });
 
   handlers.on(Opcode.Handshake, (packet) => {
     renderSystem.localEntityId = packet.assignedEntityId;

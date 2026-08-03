@@ -30,6 +30,8 @@ export type { PacketHeader } from './io/PacketHeader';
 
 export { Opcode } from './opcodes';
 
+export { PROTOCOL_VERSION } from './ProtocolVersion';
+
 export * from './packets';
 
 export { decodeAny, finalizeForWire, UnknownOpcodeError } from './codec/PacketCodec';

@@ -3,8 +3,10 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js"
   },
   "include": ["src"],
-  "references": [{ "path": "../shared" }, { "path": "../protocol" }, { "path": "../ui" }]
+  "references": []
 }

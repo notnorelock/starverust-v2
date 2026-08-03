@@ -1,0 +1,7 @@
+@import 'tailwindcss';
+
+/* Tailwind v4 auto-detects content by scanning from this file's location, but this file
+   lives in packages/ui/src/styles/ while the .tsx files using @apply-generated classes are
+   siblings under packages/ui/src/components/ — explicit @source keeps class detection
+   correct regardless of where this entry file moves relative to component source. */
+@source '../components/**/*.tsx';

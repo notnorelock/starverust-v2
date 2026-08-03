@@ -7,6 +7,7 @@ import {
   VelocityComponent,
   EntityTypeComponent,
   EntityType,
+  EntityOwnerComponent,
 } from '@starve/shared';
 import { decodeAny, finalizeForWire, Opcode } from '@starve/protocol';
 import { serializeWorldSnapshot } from './SnapshotSerializer';
@@ -64,7 +65,14 @@ describe('serializeWorldSnapshot', () => {
     if (decoded.opcode !== Opcode.WorldSnapshot) {
       throw new Error('unexpected opcode');
     }
-    expect(decoded.packet.entities[0]).toEqual({ entityId: entity.id, entityType: EntityType.Player, x: 7, y: 3, speed: 0 });
+    expect(decoded.packet.entities[0]).toEqual({
+      entityId: entity.id,
+      entityType: EntityType.Player,
+      ownerPid: 0,
+      x: 7,
+      y: 3,
+      speed: 0,
+    });
   });
 
   it('falls back to PositionComponent for entities with no RenderPositionComponent', () => {
@@ -78,7 +86,14 @@ describe('serializeWorldSnapshot', () => {
     if (decoded.opcode !== Opcode.WorldSnapshot) {
       throw new Error('unexpected opcode');
     }
-    expect(decoded.packet.entities[0]).toEqual({ entityId: entity.id, entityType: EntityType.Player, x: 42, y: -8, speed: 0 });
+    expect(decoded.packet.entities[0]).toEqual({
+      entityId: entity.id,
+      entityType: EntityType.Player,
+      ownerPid: 0,
+      x: 42,
+      y: -8,
+      speed: 0,
+    });
   });
 
   it('broadcasts VelocityComponent magnitude as speed', () => {
@@ -115,5 +130,26 @@ describe('serializeWorldSnapshot', () => {
     const noTypeEntity = decoded.packet.entities.find((e) => e.entityId === noType.id)!;
     expect(wallEntity.entityType).toBe(EntityType.WorldGeometry);
     expect(noTypeEntity.entityType).toBe(EntityType.Player);
+  });
+
+  it('broadcasts ownerPid from EntityOwnerComponent, falling back to NO_OWNER_PID (0) when absent', () => {
+    const world = createWorld();
+    const owned = world.entities.createEntity();
+    world.entities.addComponent(owned.id, PositionComponent, new PositionComponent(owned.id, 0, 0));
+    world.entities.addComponent(owned.id, EntityOwnerComponent, new EntityOwnerComponent(owned.id, 5));
+
+    const unowned = world.entities.createEntity();
+    world.entities.addComponent(unowned.id, PositionComponent, new PositionComponent(unowned.id, 0, 0));
+
+    const buffer = serializeWorldSnapshot(world, 0);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    const ownedEntity = decoded.packet.entities.find((e) => e.entityId === owned.id)!;
+    const unownedEntity = decoded.packet.entities.find((e) => e.entityId === unowned.id)!;
+    expect(ownedEntity.ownerPid).toBe(5);
+    expect(unownedEntity.ownerPid).toBe(0);
   });
 });

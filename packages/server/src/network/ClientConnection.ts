@@ -18,6 +18,16 @@ export interface ConnectionSocketData {
  */
 export class ClientConnection {
   public entityId: EntityId | undefined;
+  /**
+   * A player-networking identity, distinct from entityId — assigned once (see
+   * ConnectionRegistry.assignPid, called from PlayerSession.onHelloReceived after
+   * validation passes) from its own independent sequence, so ownership/networking
+   * references (see EntityOwnerComponent) can never be confused with or collide against
+   * the general ECS entityId space. entityId is Stage 1 accident of implementation (a
+   * player's entity happens to live in the same id space as everything else in the
+   * world); pid is deliberately its own namespace for "which player."
+   */
+  public pid: number | undefined;
   private latestInput: PlayerInputPacket | undefined;
 
   constructor(
@@ -34,6 +44,15 @@ export class ClientConnection {
    *  protects a shared frame once instead of redundantly per-recipient. */
   sendProtected(wireBytes: ArrayBuffer): void {
     this.socket.sendBinary(wireBytes);
+  }
+
+  /**
+   * Gracefully closes the underlying socket — used after sending a ConnectionRejectedPacket
+   * (see PlayerSession.onHelloReceived) so a rejected connection doesn't linger open with
+   * no player entity ever created for it.
+   */
+  close(): void {
+    this.socket.close();
   }
 
   setLatestInput(input: PlayerInputPacket): void {

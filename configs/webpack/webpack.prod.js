@@ -5,6 +5,7 @@ const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 const { createCommonConfig } = require('./webpack.common');
 const domprops = require('./domprops.cjs');
+const solidDelegatedEvents = require('./solid-delegated-events.cjs');
 
 /**
  * @param {string} packageRoot
@@ -35,12 +36,15 @@ function createProdConfig(packageRoot) {
             },
             mangle: {
               toplevel: true,
-              // Mangles all object property names EXCEPT the reserved DOM/Web API list
-              // (terser's own domprops.js — className, style, addEventListener, canvas
-              // context methods, etc.), so our own class fields/methods get shortened
-              // while every native browser API interaction stays intact.
+              // Mangles all object property names EXCEPT the reserved list, so our own
+              // class fields/methods get shortened while every native browser API
+              // interaction (domprops.cjs — className, style, addEventListener, canvas
+              // context methods, etc.) and SolidJS's own $$<event>/$$<event>Data
+              // delegated-event convention (solid-delegated-events.cjs — not a real DOM
+              // API, so it's absent from domprops.cjs; see that file's doc comment for the
+              // exact failure this caused when it wasn't reserved) stay intact.
               properties: {
-                reserved: domprops,
+                reserved: [...domprops, ...solidDelegatedEvents],
                 keep_quoted: true,
               },
             },

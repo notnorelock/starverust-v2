@@ -1,4 +1,5 @@
 import { FixedTimestepLoop, Logger, World } from '@starve/shared';
+import type { HelloPacket } from '@starve/protocol';
 import type { Kysely } from 'kysely';
 import type { EnvConfig } from '../utils/EnvConfig';
 import { createServerWorld } from '../world/ServerWorldFactory';
@@ -7,7 +8,7 @@ import { ConnectionRegistry } from '../network/ConnectionRegistry';
 import { PacketRouter } from '../network/PacketRouter';
 import type { ClientConnection } from '../network/ClientConnection';
 import { PlayerRepository } from '../database/repositories/PlayerRepository';
-import { onConnectionClosed, onConnectionEstablished } from '../players/PlayerSession';
+import { onConnectionClosed, onHelloReceived } from '../players/PlayerSession';
 import { EventBus } from '../events/EventBus';
 import { buildTickPipeline } from './TickPipeline';
 import { NETWORK_SERVICE, CONNECTION_REGISTRY, PLAYER_REPOSITORY, EVENT_BUS } from './ServiceKeys';
@@ -50,7 +51,7 @@ export class GameServer {
     this.gateway = new WebSocketGateway({
       port: config.port,
       connectionRegistry: this.connectionRegistry,
-      packetRouter: new PacketRouter(),
+      packetRouter: new PacketRouter({ onHello: (connection, hello) => this.handleHello(connection, hello) }),
       onConnect: (connection) => this.handleConnect(connection),
       onDisconnect: (connection) => this.handleDisconnect(connection),
     });
@@ -82,16 +83,24 @@ export class GameServer {
   }
 
   private handleConnect(connection: ClientConnection): void {
+    // Socket open alone creates no player and sends nothing — see PacketRouter's onHello
+    // callback / PlayerSession.onHelloReceived for what actually spawns a player entity.
+    logger.info(`Connection ${connection.connectionId} opened, awaiting Hello`);
+  }
+
+  private handleHello(connection: ClientConnection, hello: HelloPacket): void {
     const playerRepository = this.world.services.resolve(PLAYER_REPOSITORY);
     const worldBounds = boundsFromConfig(this.worldConfig);
-    void onConnectionEstablished(
+    void onHelloReceived(
       connection,
+      hello,
       this.world,
       playerRepository,
       this.config.tickRate,
       this.worldConfig,
       worldBounds,
       this.gateway,
+      this.connectionRegistry,
     );
   }
 

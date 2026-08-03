@@ -3,6 +3,25 @@
   "compilerOptions": {
     "composite": false,
     "rootDir": "../..",
-    "noEmit": true
-  }
+    "noEmit": true,
+    // ts-loader/ForkTsCheckerWebpackPlugin never compile @starve/ui's .tsx files directly
+    // (babel-loader does, via its own rule in webpack.common.js) — but this config is what
+    // TS uses to resolve and typecheck the *import* of @starve/ui from client's own .ts
+    // files, and without jsx/jsxImportSource set here, TS can't even parse @starve/ui's
+    // .tsx source enough to resolve the module (see the "'--jsx' is not set" build error
+    // this fixed). Must match packages/ui/tsconfig.json's own jsx settings.
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js"
+  },
+  // tsconfig.json's own "include": ["src"] only covers client's own source. Under normal
+  // `tsc --build` project references, packages/ui is a separate compilation and client
+  // only ever sees its emitted .d.ts output — but this rootDir-relaxed config bundles raw
+  // cross-package .ts/.tsx source directly (see the rootDir comment above), which means
+  // ambient module declarations living only in ui's source (packages/ui/src/styles/css.d.ts,
+  // declaring `*.module.css`) are never part of this program unless explicitly included —
+  // they can't be picked up via any `import`, since ambient .d.ts files are never imported,
+  // only included by the compiler's file list. Without this, ts-loader reports "Cannot find
+  // module './WelcomeOverlay.module.css'" even though `bun run typecheck` (which does use
+  // real project references) passes fine.
+  "include": ["src", "../ui/src"]
 }

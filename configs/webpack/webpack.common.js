@@ -27,7 +27,7 @@ function createCommonConfig(packageRoot, options = {}) {
   return {
     entry: path.join(packageRoot, 'src/index.ts'),
     resolve: {
-      extensions: ['.ts', '.js'],
+      extensions: ['.ts', '.tsx', '.js'],
       extensionAlias: {
         '.js': ['.ts', '.js'],
       },
@@ -50,6 +50,29 @@ function createCommonConfig(packageRoot, options = {}) {
                 // which ts-loader would reject as "not under rootDir" — so bundling uses a
                 // separate, looser tsconfig with no rootDir restriction instead.
                 configFile: path.join(packageRoot, 'tsconfig.webpack.json'),
+              },
+            },
+          ],
+          exclude: /node_modules/,
+        },
+        {
+          // .tsx (SolidJS components — see packages/ui) goes through Babel alone, not
+          // ts-loader: Solid's JSX compiles to real fine-grained-reactive DOM calls, which
+          // needs babel-preset-solid's own transform, not TypeScript's generic JSX
+          // handling. @babel/preset-typescript strips types in the same pass so this
+          // doesn't also need to run through ts-loader first — chaining two transpilers on
+          // the same file would be redundant. Real type-checking for .tsx still happens
+          // via `bun run typecheck` (tsc --build) and ForkTsCheckerWebpackPlugin below,
+          // same as .ts files; Babel here only ever transpiles, never checks types.
+          test: /\.tsx$/,
+          use: [
+            {
+              loader: 'babel-loader',
+              options: {
+                presets: [
+                  '@babel/preset-typescript',
+                  ['babel-preset-solid', { generate: 'dom', hydratable: false }],
+                ],
               },
             },
           ],
@@ -79,6 +102,43 @@ function createCommonConfig(packageRoot, options = {}) {
           test: /\.scss$/,
           exclude: /\.module\.scss$/,
           use: [styleLoader, 'css-loader', 'sass-loader'],
+        },
+        {
+          // Tailwind v4 (packages/ui) uses plain CSS with @apply/@reference, not SCSS —
+          // its own rule so sass-loader (which doesn't understand Tailwind's `@import
+          // "tailwindcss"` directive semantics) never sees these files. postcss-loader
+          // runs @tailwindcss/postcss (see postcss.config.cjs) to expand @apply/@reference
+          // into real utility CSS before css-loader processes the result.
+          test: /\.module\.css$/,
+          use: [
+            styleLoader,
+            {
+              loader: 'css-loader',
+              options: {
+                modules: {
+                  localIdentName: '[hash:base64:14]',
+                  namedExport: false,
+                },
+                importLoaders: 1,
+              },
+            },
+            {
+              loader: 'postcss-loader',
+              options: { postcssOptions: { config: path.join(__dirname, 'postcss.config.cjs') } },
+            },
+          ],
+        },
+        {
+          test: /\.css$/,
+          exclude: /\.module\.css$/,
+          use: [
+            styleLoader,
+            'css-loader',
+            {
+              loader: 'postcss-loader',
+              options: { postcssOptions: { config: path.join(__dirname, 'postcss.config.cjs') } },
+            },
+          ],
         },
         {
           test: /\.(png|jpe?g|gif|svg|webp)$/i,

@@ -7,6 +7,8 @@ import { decodeWorldSnapshot, type WorldSnapshotPacket } from '../packets/WorldS
 import { decodeEntityInsert, type EntityInsertPacket } from '../packets/EntityInsertPacket';
 import { decodeEntityDestroy, type EntityDestroyPacket } from '../packets/EntityDestroyPacket';
 import { decodeEntityUpdate, type EntityUpdatePacket } from '../packets/EntityUpdatePacket';
+import { decodeHello, type HelloPacket } from '../packets/HelloPacket';
+import { decodeConnectionRejected, type ConnectionRejectedPacket } from '../packets/ConnectionRejectedPacket';
 import { protect, unprotect } from '../security/PacketFraming';
 
 export type DecodedPacket =
@@ -15,7 +17,9 @@ export type DecodedPacket =
   | { opcode: Opcode.WorldSnapshot; packet: WorldSnapshotPacket }
   | { opcode: Opcode.EntityInsert; packet: EntityInsertPacket }
   | { opcode: Opcode.EntityDestroy; packet: EntityDestroyPacket }
-  | { opcode: Opcode.EntityUpdate; packet: EntityUpdatePacket };
+  | { opcode: Opcode.EntityUpdate; packet: EntityUpdatePacket }
+  | { opcode: Opcode.Hello; packet: HelloPacket }
+  | { opcode: Opcode.ConnectionRejected; packet: ConnectionRejectedPacket };
 
 /** Thrown when a buffer's opcode has no registered decoder. */
 export class UnknownOpcodeError extends Error {
@@ -65,6 +69,10 @@ export function decodeAny(wire: ArrayBuffer | Uint8Array): DecodedPacket {
         return { opcode: Opcode.EntityDestroy, packet: decodeEntityDestroy() };
       case Opcode.EntityUpdate:
         return { opcode: Opcode.EntityUpdate, packet: decodeEntityUpdate() };
+      case Opcode.Hello:
+        return { opcode: Opcode.Hello, packet: decodeHello() };
+      case Opcode.ConnectionRejected:
+        return { opcode: Opcode.ConnectionRejected, packet: decodeConnectionRejected() };
       default:
         throw new UnknownOpcodeError(header.opcode);
     }
