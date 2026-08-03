@@ -1,0 +1,14 @@
+@reference "../styles/tailwind.css";
+
+.container {
+  @apply pointer-events-none fixed bottom-8 left-1/2 w-80 -translate-x-1/2 opacity-0 transition-opacity;
+}
+
+.open {
+  @apply pointer-events-auto opacity-100;
+}
+
+.input {
+  @apply w-full rounded-md border border-neutral-700 bg-neutral-900/90 px-3 py-2 text-neutral-50 outline-none backdrop-blur-sm;
+  @apply focus:border-emerald-500;
+}

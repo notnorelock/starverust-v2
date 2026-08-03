@@ -29,8 +29,18 @@ import { encodeWorldSnapshot, NO_OWNER_PID, type WorldSnapshotEntity } from '@st
  * packet is self-contained and a newly-connected client doesn't depend on the separate
  * EntityInsertPacket catch-up loop (see PlayerSession.onHelloReceived) having already run
  * first.
+ *
+ * Also broadcasts each owned entity's nickname, resolved via `nicknameForPid` — nickname
+ * itself isn't ECS state (it lives on ClientConnection/ConnectionRegistry, session data,
+ * not simulation state), so this is a lookup function rather than a component read, unlike
+ * every other field here. Falls back to an empty string for unowned entities or a pid this
+ * resolver doesn't recognize (e.g. a race between disconnect and this being called).
  */
-export function serializeWorldSnapshot(world: World, serverTick: number): ArrayBuffer {
+export function serializeWorldSnapshot(
+  world: World,
+  serverTick: number,
+  nicknameForPid: (pid: number) => string | undefined,
+): ArrayBuffer {
   const entities: WorldSnapshotEntity[] = [];
 
   for (const entityId of world.entities.query(PositionComponent)) {
@@ -39,17 +49,27 @@ export function serializeWorldSnapshot(world: World, serverTick: number): ArrayB
     const entityType = world.entities.getComponent(entityId, EntityTypeComponent)?.entityType ?? EntityType.Player;
     const ownerPid = world.entities.getComponent(entityId, EntityOwnerComponent)?.ownerPid ?? NO_OWNER_PID;
     const angle = world.entities.getComponent(entityId, AimComponent)?.angle ?? 0;
+    const nickname = ownerPid === NO_OWNER_PID ? '' : (nicknameForPid(ownerPid) ?? '');
 
     const renderPosition = world.entities.getComponent(entityId, RenderPositionComponent);
     if (renderPosition) {
-      entities.push({ entityId, entityType, ownerPid, x: renderPosition.x, y: renderPosition.y, speed, angle });
+      entities.push({
+        entityId,
+        entityType,
+        ownerPid,
+        x: renderPosition.x,
+        y: renderPosition.y,
+        speed,
+        angle,
+        nickname,
+      });
       continue;
     }
     const position = world.entities.getComponent(entityId, PositionComponent);
     if (!position) {
       continue;
     }
-    entities.push({ entityId, entityType, ownerPid, x: position.x, y: position.y, speed, angle });
+    entities.push({ entityId, entityType, ownerPid, x: position.x, y: position.y, speed, angle, nickname });
   }
 
   return encodeWorldSnapshot({ serverTick, entities });

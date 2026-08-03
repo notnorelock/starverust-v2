@@ -106,6 +106,63 @@ describe('KeyboardInputSource', () => {
     expect(source.sample()).toBe(InputFlag.Up | InputFlag.Right);
   });
 
+  describe('setEnabled', () => {
+    it('ignores keydown/keyup while disabled', () => {
+      const source = new KeyboardInputSource();
+      const win = new FakeWindow();
+      source.attach(win as unknown as Window);
+      const listener = vi.fn();
+      source.onChange(listener);
+
+      source.setEnabled(false);
+      win.dispatch('keydown', 'KeyW');
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(source.sample()).toBe(0);
+    });
+
+    it('clears already-held keys and emits 0 when disabled mid-stride', () => {
+      const source = new KeyboardInputSource();
+      const win = new FakeWindow();
+      source.attach(win as unknown as Window);
+      win.dispatch('keydown', 'KeyW');
+      const listener = vi.fn();
+      source.onChange(listener);
+
+      source.setEnabled(false);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(0);
+      expect(source.sample()).toBe(0);
+    });
+
+    it('does not emit when disabling with no keys held', () => {
+      const source = new KeyboardInputSource();
+      const win = new FakeWindow();
+      source.attach(win as unknown as Window);
+      const listener = vi.fn();
+      source.onChange(listener);
+
+      source.setEnabled(false);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('resumes tracking keys once re-enabled', () => {
+      const source = new KeyboardInputSource();
+      const win = new FakeWindow();
+      source.attach(win as unknown as Window);
+      source.setEnabled(false);
+      const listener = vi.fn();
+      source.onChange(listener);
+
+      source.setEnabled(true);
+      win.dispatch('keydown', 'KeyW');
+
+      expect(listener).toHaveBeenCalledWith(InputFlag.Up);
+    });
+  });
+
   it('unsubscribing stops further notifications', () => {
     const source = new KeyboardInputSource();
     const win = new FakeWindow();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { beginWrite, writeU8, writeU16, writeU32, writeI16, writeF32, writeString, endWrite } from './BufferWriter';
-import { beginRead, endRead, readU8, readU16, readU32, readI16, readF32, readString } from './BufferReader';
+import { beginWrite, writeU8, writeU16, writeU32, writeI16, writeF32, writeF64, writeString, endWrite } from './BufferWriter';
+import { beginRead, endRead, readU8, readU16, readU32, readI16, readF32, readF64, readString } from './BufferReader';
 
 describe('BufferWriter', () => {
   it('writes and round-trips u8 values including edges', () => {
@@ -63,6 +63,18 @@ describe('BufferWriter', () => {
     expect(readF32()).toBeCloseTo(3.14159, 4);
     expect(readF32()).toBeCloseTo(-100.5, 4);
     expect(readF32()).toBe(0);
+    endRead();
+  });
+
+  it('round-trips f64 values with full double precision, unlike f32', () => {
+    beginWrite();
+    writeF64(performance.timeOrigin + 123.456789012345);
+    writeF64(-100.5);
+    writeF64(0);
+    beginRead(endWrite());
+    expect(readF64()).toBeCloseTo(performance.timeOrigin + 123.456789012345, 9);
+    expect(readF64()).toBe(-100.5);
+    expect(readF64()).toBe(0);
     endRead();
   });
 

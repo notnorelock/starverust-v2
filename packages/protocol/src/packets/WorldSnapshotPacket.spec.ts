@@ -20,10 +20,12 @@ describe('WorldSnapshotPacket', () => {
     expect(roundTrip(packet)).toEqual(packet);
   });
 
-  it('round-trips with a single entity, including entityType, ownerPid, and angle', () => {
+  it('round-trips with a single entity, including entityType, ownerPid, angle, and nickname', () => {
     const packet: WorldSnapshotPacket = {
       serverTick: 100,
-      entities: [{ entityId: 7, entityType: 1, ownerPid: 3, x: 12.5, y: -3.25, speed: 200, angle: Math.PI / 4 }],
+      entities: [
+        { entityId: 7, entityType: 1, ownerPid: 3, x: 12.5, y: -3.25, speed: 200, angle: Math.PI / 4, nickname: 'Alice' },
+      ],
     };
     const result = roundTrip(packet);
     expect(result.serverTick).toBe(100);
@@ -35,18 +37,20 @@ describe('WorldSnapshotPacket', () => {
     expect(result.entities[0]!.y).toBeCloseTo(-3.25, 5);
     expect(result.entities[0]!.speed).toBeCloseTo(200, 5);
     expect(result.entities[0]!.angle).toBeCloseTo(Math.PI / 4, 5);
+    expect(result.entities[0]!.nickname).toBe('Alice');
   });
 
-  it('round-trips NO_OWNER_PID for unowned entities', () => {
+  it('round-trips NO_OWNER_PID and an empty nickname for unowned entities', () => {
     const packet: WorldSnapshotPacket = {
       serverTick: 0,
-      entities: [{ entityId: 1, entityType: 1, ownerPid: NO_OWNER_PID, x: 0, y: 0, speed: 0, angle: 0 }],
+      entities: [{ entityId: 1, entityType: 1, ownerPid: NO_OWNER_PID, x: 0, y: 0, speed: 0, angle: 0, nickname: '' }],
     };
     const result = roundTrip(packet);
     expect(result.entities[0]!.ownerPid).toBe(NO_OWNER_PID);
+    expect(result.entities[0]!.nickname).toBe('');
   });
 
-  it('round-trips with many entities preserving order and per-entity entityType/ownerPid/angle', () => {
+  it('round-trips with many entities preserving order and per-entity entityType/ownerPid/angle/nickname', () => {
     const entities = Array.from({ length: 50 }, (_, i) => ({
       entityId: i,
       entityType: i % 2,
@@ -55,6 +59,7 @@ describe('WorldSnapshotPacket', () => {
       y: -i * 0.5,
       speed: i % 2 === 0 ? 200 : 350,
       angle: (i / 50) * Math.PI * 2 - Math.PI,
+      nickname: i % 3 === 0 ? '' : `Player${i}`,
     }));
     const packet: WorldSnapshotPacket = { serverTick: 999, entities };
     const result = roundTrip(packet);
@@ -67,6 +72,7 @@ describe('WorldSnapshotPacket', () => {
       expect(entity.y).toBeCloseTo(-i * 0.5, 4);
       expect(entity.speed).toBeCloseTo(i % 2 === 0 ? 200 : 350, 4);
       expect(entity.angle).toBeCloseTo((i / 50) * Math.PI * 2 - Math.PI, 4);
+      expect(entity.nickname).toBe(i % 3 === 0 ? '' : `Player${i}`);
     });
   });
 
@@ -79,6 +85,7 @@ describe('WorldSnapshotPacket', () => {
       y: (Math.random() - 0.5) * 100000,
       speed: Math.random() * 500,
       angle: (Math.random() - 0.5) * Math.PI * 2,
+      nickname: '',
     }));
     const packet: WorldSnapshotPacket = { serverTick: 1, entities };
     const result = roundTrip(packet);
@@ -93,12 +100,12 @@ describe('WorldSnapshotPacket', () => {
   it('produces a header with the correct opcode and payload length', () => {
     const buffer = encodeWorldSnapshot({
       serverTick: 0,
-      entities: [{ entityId: 1, entityType: 0, ownerPid: NO_OWNER_PID, x: 0, y: 0, speed: 0, angle: 0 }],
+      entities: [{ entityId: 1, entityType: 0, ownerPid: NO_OWNER_PID, x: 0, y: 0, speed: 0, angle: 0, nickname: '' }],
     });
     beginRead(buffer);
     const header = readHeader();
     endRead();
     expect(header.opcode).toBe(Opcode.WorldSnapshot);
-    expect(header.length).toBe(6 + 25);
+    expect(header.length).toBe(6 + 25 + 2); // 25-byte fixed record + u16 empty-string length prefix
   });
 });

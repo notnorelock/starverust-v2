@@ -1,4 +1,4 @@
-import { Opcode, decodeAny, type HelloPacket } from '@starve/protocol';
+import { Opcode, decodeAny, encodePong, type HelloPacket, type ChatMessagePacket } from '@starve/protocol';
 import { Logger } from '@starve/shared';
 import type { ClientConnection } from './ClientConnection';
 
@@ -14,6 +14,12 @@ export interface PacketRouterOptions {
    * reason to know about otherwise.
    */
   onHello: (connection: ClientConnection, packet: HelloPacket) => void;
+  /**
+   * Invoked for every inbound ChatMessagePacket — same reasoning as onHello: broadcasting
+   * to every other connection needs NetworkService, which this router has no reason to
+   * hold itself (see ChatSession.onChatMessageReceived).
+   */
+  onChatMessage: (connection: ClientConnection, packet: ChatMessagePacket) => void;
 }
 
 /**
@@ -37,6 +43,15 @@ export class PacketRouter {
           break;
         case Opcode.PlayerAngle:
           connection.setLatestAngle(decoded.packet);
+          break;
+        case Opcode.Ping:
+          // Bounced straight back, unmodified — see PongPacket's own doc comment. Handled
+          // right here rather than via a callback (unlike Hello) since it needs nothing
+          // but the connection itself to reply.
+          connection.send(encodePong({ clientSendTime: decoded.packet.clientSendTime }));
+          break;
+        case Opcode.ChatMessage:
+          this.options.onChatMessage(connection, decoded.packet);
           break;
         default:
           logger.warn(`Received unexpected opcode from client: 0x${decoded.opcode.toString(16)}`);

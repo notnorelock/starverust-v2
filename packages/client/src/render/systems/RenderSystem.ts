@@ -6,6 +6,7 @@ import type { SnapshotBuffer } from '../../network/SnapshotBuffer';
 import type { EntityTypeRegistry } from '../../network/EntityTypeRegistry';
 import type { LocalPlayerDataStore } from '../../core/LocalPlayerDataStore';
 import type { MouseAngleInputSource } from '../../input/MouseAngleInputSource';
+import type { ChatBubbleStore } from '../../network/ChatBubbleStore';
 import type { EntityRenderer } from '../renderers/EntityRenderer';
 import { RenderableComponent } from '../../ecs/components/RenderableComponent';
 import { InterpolationComponent } from '../../ecs/components/InterpolationComponent';
@@ -28,6 +29,10 @@ import { InterpolationComponent } from '../../ecs/components/InterpolationCompon
  * position; routing it through a network round-trip plus interpolation would only add
  * lag with no benefit, the same reasoning that exempted the local entity's *position* from
  * interpolation delay earlier in this project.
+ *
+ * ChatBubbleStore is advanced here too (chatBubbles.advance(dt)) for the same reason
+ * SnapshotBuffer/Camera2D are — it's per-frame animation timing, and PlayerRenderer reads
+ * its current state during the draw() pass immediately below.
  */
 export class RenderSystem extends System {
   readonly query: ReadonlyArray<ComponentType> = [RenderableComponent];
@@ -41,6 +46,7 @@ export class RenderSystem extends System {
     private readonly localPlayer: LocalPlayerDataStore,
     private readonly renderers: ReadonlyMap<EntityType, EntityRenderer>,
     private readonly mouseAngleInput: MouseAngleInputSource,
+    private readonly chatBubbles: ChatBubbleStore,
   ) {
     super();
   }
@@ -57,6 +63,7 @@ export class RenderSystem extends System {
       this.camera.follow(localPosition.x, localPosition.y);
     }
     this.camera.update(dt);
+    this.chatBubbles.advance(dt);
 
     this.draw(world);
   }

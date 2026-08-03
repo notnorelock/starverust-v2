@@ -1,5 +1,5 @@
-import { beginWrite, writeU8, writeU16, writeU32, writeF32, endWrite } from '../io/BufferWriter';
-import { readU8, readU16, readU32, readF32 } from '../io/BufferReader';
+import { beginWrite, writeU8, writeU16, writeU32, writeF32, writeString, writerLength, endWrite } from '../io/BufferWriter';
+import { readU8, readU16, readU32, readF32, readString } from '../io/BufferReader';
 import { writeHeader, HEADER_SIZE } from '../io/PacketHeader';
 import { Opcode } from '../opcodes';
 
@@ -39,6 +39,14 @@ export interface WorldSnapshotEntity extends EntitySnapshot {
   entityType: number;
   /** See EntityOwnerComponent (shared) / EntityInsertPacket.NO_OWNER_PID if unowned. */
   ownerPid: number;
+  /**
+   * The owning player's nickname, empty string for unowned/non-player entities. Embedded
+   * directly here (rather than relying solely on the separate PlayerJoinPacket catch-up
+   * loop — see PlayerSession.onHelloReceived) so this packet alone is enough to render
+   * every pre-existing player's name label, without depending on PlayerJoinPacket having
+   * already been processed first.
+   */
+  nickname: string;
 }
 
 /**
@@ -56,22 +64,16 @@ export interface WorldSnapshotPacket {
   entities: readonly WorldSnapshotEntity[];
 }
 
-// Payload layout:
+// Payload layout (variable length — per-entity records carry a variable-length nickname,
+// see writeString/readString, so unlike most binary packets in this protocol there's no
+// fixed per-record byte size to precompute; two-pass encode, same reasoning as HelloPacket):
 // [0..3] u32 serverTick
 // [4..5] u16 entityCount
-// repeated per entity (25 bytes): u32 entityId, u8 entityType, u32 ownerPid, f32 x, f32 y, f32 speed, f32 angle
-const HEADER_FIELDS_SIZE = 6;
-const ENTITY_RECORD_SIZE = 25;
+// repeated per entity: u32 entityId, u8 entityType, u32 ownerPid, f32 x, f32 y, f32 speed,
+//   f32 angle, string nickname (u16 length prefix + UTF-8 bytes)
 
-export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
-  const payloadSize = HEADER_FIELDS_SIZE + packet.entities.length * ENTITY_RECORD_SIZE;
-  beginWrite(HEADER_SIZE + payloadSize);
-  writeHeader({ opcode: Opcode.WorldSnapshot, flags: 0, length: payloadSize });
-
-  writeU32(packet.serverTick);
-  writeU16(packet.entities.length);
-
-  for (const entity of packet.entities) {
+function writeEntities(entities: readonly WorldSnapshotEntity[]): void {
+  for (const entity of entities) {
     writeU32(entity.entityId);
     writeU8(entity.entityType);
     writeU32(entity.ownerPid);
@@ -79,7 +81,23 @@ export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
     writeF32(entity.y);
     writeF32(entity.speed);
     writeF32(entity.angle);
+    writeString(entity.nickname);
   }
+}
+
+export function encodeWorldSnapshot(packet: WorldSnapshotPacket): ArrayBuffer {
+  beginWrite();
+  writeU32(packet.serverTick);
+  writeU16(packet.entities.length);
+  writeEntities(packet.entities);
+  const payloadSize = writerLength();
+  endWrite();
+
+  beginWrite(HEADER_SIZE + payloadSize);
+  writeHeader({ opcode: Opcode.WorldSnapshot, flags: 0, length: payloadSize });
+  writeU32(packet.serverTick);
+  writeU16(packet.entities.length);
+  writeEntities(packet.entities);
 
   return endWrite();
 }
@@ -97,7 +115,8 @@ export function decodeWorldSnapshot(): WorldSnapshotPacket {
     const y = readF32();
     const speed = readF32();
     const angle = readF32();
-    entities.push({ entityId, entityType, ownerPid, x, y, speed, angle });
+    const nickname = readString();
+    entities.push({ entityId, entityType, ownerPid, x, y, speed, angle, nickname });
   }
 
   return { serverTick, entities };

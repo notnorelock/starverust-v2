@@ -124,7 +124,7 @@ export async function onHelloReceived(
     }
     connection.send(encodePlayerJoin({ pid: other.pid, entityId: other.entityId, nickname: other.nickname }));
   }
-  connection.send(serializeWorldSnapshot(world, 0));
+  connection.send(serializeWorldSnapshot(world, 0, (pid) => nicknameForPid(connections, pid)));
 
   const entityId = createPlayerEntity(world, worldConfig.spawnX, worldConfig.spawnY, pid);
   connection.entityId = entityId;
@@ -155,6 +155,22 @@ export async function onHelloReceived(
   logger.info(
     `Player session established: connection=${connection.connectionId} entity=${entityId} pid=${pid} nickname=${nickname}`,
   );
+}
+
+/**
+ * Resolves a connected player's nickname from their pid — used to embed nicknames directly
+ * into WorldSnapshotPacket (see serializeWorldSnapshot) rather than relying solely on the
+ * separate PlayerJoinPacket catch-up loop above. Linear scan over live connections rather
+ * than a dedicated pid index: this only runs once per new connection's own catch-up
+ * snapshot, not per tick, so the O(connections) cost here is negligible.
+ */
+function nicknameForPid(connections: ConnectionRegistry, pid: number): string | undefined {
+  for (const connection of connections.all()) {
+    if (connection.pid === pid) {
+      return connection.nickname;
+    }
+  }
+  return undefined;
 }
 
 export function onConnectionClosed(connection: ClientConnection, world: World, network: NetworkService): void {

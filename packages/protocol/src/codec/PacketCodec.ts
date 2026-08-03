@@ -12,6 +12,10 @@ import { decodeHello, type HelloPacket } from '../packets/HelloPacket';
 import { decodeConnectionRejected, type ConnectionRejectedPacket } from '../packets/ConnectionRejectedPacket';
 import { decodePlayerJoin, type PlayerJoinPacket } from '../packets/PlayerJoinPacket';
 import { decodePlayerLeft, type PlayerLeftPacket } from '../packets/PlayerLeftPacket';
+import { decodePing, type PingPacket } from '../packets/PingPacket';
+import { decodePong, type PongPacket } from '../packets/PongPacket';
+import { decodeChatMessage, type ChatMessagePacket } from '../packets/ChatMessagePacket';
+import { decodeChatBroadcast, type ChatBroadcastPacket } from '../packets/ChatBroadcastPacket';
 import { protect, unprotect } from '../security/PacketFraming';
 
 export type DecodedPacket =
@@ -25,7 +29,11 @@ export type DecodedPacket =
   | { opcode: Opcode.Hello; packet: HelloPacket }
   | { opcode: Opcode.ConnectionRejected; packet: ConnectionRejectedPacket }
   | { opcode: Opcode.PlayerJoin; packet: PlayerJoinPacket }
-  | { opcode: Opcode.PlayerLeft; packet: PlayerLeftPacket };
+  | { opcode: Opcode.PlayerLeft; packet: PlayerLeftPacket }
+  | { opcode: Opcode.Ping; packet: PingPacket }
+  | { opcode: Opcode.Pong; packet: PongPacket }
+  | { opcode: Opcode.ChatMessage; packet: ChatMessagePacket }
+  | { opcode: Opcode.ChatBroadcast; packet: ChatBroadcastPacket };
 
 /** Thrown when a buffer's opcode has no registered decoder. */
 export class UnknownOpcodeError extends Error {
@@ -85,6 +93,14 @@ export function decodeAny(wire: ArrayBuffer | Uint8Array): DecodedPacket {
         return { opcode: Opcode.PlayerJoin, packet: decodePlayerJoin() };
       case Opcode.PlayerLeft:
         return { opcode: Opcode.PlayerLeft, packet: decodePlayerLeft() };
+      case Opcode.Ping:
+        return { opcode: Opcode.Ping, packet: decodePing() };
+      case Opcode.Pong:
+        return { opcode: Opcode.Pong, packet: decodePong() };
+      case Opcode.ChatMessage:
+        return { opcode: Opcode.ChatMessage, packet: decodeChatMessage() };
+      case Opcode.ChatBroadcast:
+        return { opcode: Opcode.ChatBroadcast, packet: decodeChatBroadcast() };
       default:
         throw new UnknownOpcodeError(header.opcode);
     }

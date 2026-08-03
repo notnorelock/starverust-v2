@@ -4,7 +4,7 @@ import { PLAYER_MOVE_SPEED, PLAYER_SPRINT_SPEED, CLIENT_POSITION_SNAP_DISTANCE }
 import type { WorldSnapshotPacket, EntityUpdatePacket, WorldSnapshotEntity, EntitySnapshot } from '@starve/protocol';
 
 function snapshotEntity(fields: Partial<WorldSnapshotEntity> & { entityId: number; x: number; y: number }): WorldSnapshotEntity {
-  return { entityType: 0, ownerPid: 0, speed: PLAYER_MOVE_SPEED, angle: 0, ...fields };
+  return { entityType: 0, ownerPid: 0, speed: PLAYER_MOVE_SPEED, angle: 0, nickname: '', ...fields };
 }
 
 function updateEntity(fields: Partial<EntitySnapshot> & { entityId: number; x: number; y: number }): EntitySnapshot {

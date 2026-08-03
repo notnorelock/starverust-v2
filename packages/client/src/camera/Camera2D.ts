@@ -32,8 +32,22 @@ export class Camera2D {
   private readonly ease: Ease2D;
   private bounds: WorldBounds = UNBOUNDED;
 
-  constructor(private readonly viewportWidth: number, private readonly viewportHeight: number) {
+  constructor(private viewportWidth: number, private viewportHeight: number) {
     this.ease = new Ease2D(0, 0, FOLLOW_EASE_DURATION_SECONDS, easeOutQuad);
+  }
+
+  /**
+   * Updates the viewport size this camera centers/clamps against — call whenever the
+   * canvas itself resizes (see CanvasContext2DProvider's own `window.addEventListener('resize', ...)`,
+   * which ClientBootstrap wires to this too). Without this, worldToScreen()'s
+   * `+ viewportWidth / 2` centering and follow()'s half-viewport boundary clamp both keep
+   * using the size the camera happened to be constructed with, drifting out of sync with
+   * the canvas's actual (now-resized) dimensions — entities would render off-center and the
+   * boundary clamp would show either too much or too little margin at the edges.
+   */
+  resize(viewportWidth: number, viewportHeight: number): void {
+    this.viewportWidth = viewportWidth;
+    this.viewportHeight = viewportHeight;
   }
 
   get x(): number {

@@ -10,6 +10,7 @@ import { Camera2D } from '../camera/Camera2D';
 import { SnapshotBuffer } from '../network/SnapshotBuffer';
 import { EntityTypeRegistry } from '../network/EntityTypeRegistry';
 import { NicknameRegistry } from '../network/NicknameRegistry';
+import { ChatBubbleStore } from '../network/ChatBubbleStore';
 import { NetworkClient } from '../network/NetworkClient';
 import { PacketHandlerRegistry } from '../network/PacketHandlerRegistry';
 import { KeyboardInputSource } from '../input/KeyboardInputSource';
@@ -36,6 +37,16 @@ export interface ClientBootstrap {
    * connection itself.
    */
   connect: (nickname: string, onRejected: (reason: RejectionReason) => void) => void;
+  /**
+   * Registers `listener` to be called with `true` once Handshake assigns this client a
+   * player (a real, playable session — not just a raw open socket, which a Hello/Handshake
+   * round-trip hasn't necessarily completed for yet) and `false` whenever the socket
+   * subsequently closes. Used by client/src/index.ts to gate ChatBox's `enabled` prop, so
+   * chat can't be opened (and is force-closed if already open) while there's no session to
+   * actually send a message through — see GameClient.sendChatMessage()'s own isConnected
+   * guard, which this is a UI-visible complement to rather than a replacement for.
+   */
+  onSessionChange: (listener: (active: boolean) => void) => void;
 }
 
 /**
@@ -57,6 +68,7 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
   const snapshotBuffer = new SnapshotBuffer();
   const entityTypes = new EntityTypeRegistry();
   const nicknames = new NicknameRegistry();
+  const chatBubbles = new ChatBubbleStore();
   const localPlayer = new LocalPlayerDataStore();
 
   world.services.register(CANVAS_PROVIDER, canvasProvider);
@@ -64,12 +76,20 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
   world.services.register(SNAPSHOT_BUFFER, snapshotBuffer);
   world.services.register(LOCAL_PLAYER_DATA, localPlayer);
 
+  // CanvasContext2DProvider resizes the canvas element itself on window resize (see its own
+  // constructor), but knows nothing about Camera2D — without this, worldToScreen()'s
+  // viewport-centering math and follow()'s boundary clamp would keep using the stale
+  // dimensions the camera was constructed with, drifting out of sync with the actual
+  // (now-resized) canvas and visibly misplacing every rendered entity relative to the
+  // player.
+  window.addEventListener('resize', () => camera.resize(window.innerWidth, window.innerHeight));
+
   // One EntityRenderer per EntityType RenderSystem might encounter — see EntityRenderer's
   // own doc comment for why this dispatch-by-type exists instead of one system doing every
   // entity's drawing inline. WorldGeometry has no renderer yet (nothing draws it today,
   // matching the pre-split behavior) — add one here when it needs a visual.
   const renderers = new Map<EntityType, EntityRenderer>([
-    [EntityType.Player, new PlayerRenderer(canvasProvider, nicknames)],
+    [EntityType.Player, new PlayerRenderer(canvasProvider, nicknames, chatBubbles)],
   ]);
 
   const keyboardInput = new KeyboardInputSource();
@@ -91,16 +111,41 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
     localPlayer,
     renderers,
     mouseAngleInput,
+    chatBubbles,
   );
   world.registerSystem(renderSystem);
 
+  // Plain callback list rather than a full pub/sub abstraction — onSessionChange has exactly
+  // one consumer today (client/src/index.ts, gating ChatBox's `enabled` prop) and this
+  // mirrors the rest of this file's style (packet handlers as plain closures) rather than
+  // introducing a generic event-bus dependency for a single signal.
+  const sessionChangeListeners: Array<(active: boolean) => void> = [];
+  function notifySessionChange(active: boolean): void {
+    for (const listener of sessionChangeListeners) {
+      listener(active);
+    }
+  }
+
   const handlers = new PacketHandlerRegistry();
-  const networkClient = new NetworkClient({ url: resolveWebSocketUrl(), handlers });
+  const networkClient = new NetworkClient({
+    url: resolveWebSocketUrl(),
+    handlers,
+    onClose: () => notifySessionChange(false),
+  });
   world.services.register(NETWORK_CLIENT, networkClient);
 
   const debugOverlay = new DebugOverlay(mountPoint);
 
-  const gameClient = new GameClient(world, networkClient, keyboardInput, mouseAngleInput, snapshotBuffer, debugOverlay, localPlayer);
+  const gameClient = new GameClient(
+    world,
+    networkClient,
+    keyboardInput,
+    mouseAngleInput,
+    snapshotBuffer,
+    debugOverlay,
+    localPlayer,
+    chatBubbles,
+  );
   gameClient.start();
 
   handlers.on(Opcode.Handshake, (packet) => {
@@ -112,17 +157,22 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
       minY: packet.worldMinY,
       maxY: packet.worldMaxY,
     });
+    notifySessionChange(true);
   });
 
   // Sent once, right after connecting — seeds initial render state for every entity that
   // already existed, before this connection's first (spatially-filtered) EntityUpdate
   // arrives. See PlayerSession.onHelloReceived / SnapshotBuffer.seed(). Also
-  // self-contained for entityType (unlike EntityUpdatePacket) so this doesn't depend on
-  // the separate EntityInsert catch-up loop having already run first.
+  // self-contained for entityType and nickname (unlike EntityUpdatePacket) so this doesn't
+  // depend on the separate EntityInsert/PlayerJoin catch-up loops having already run first
+  // — see WorldSnapshotEntity's own doc comment for why nickname is embedded here too.
   handlers.on(Opcode.WorldSnapshot, (packet) => {
     snapshotBuffer.seed(packet);
     for (const entity of packet.entities) {
       entityTypes.insert(entity.entityId, entity.entityType as EntityType);
+      if (entity.nickname) {
+        nicknames.insert(entity.ownerPid, entity.entityId, entity.nickname);
+      }
     }
   });
 
@@ -147,6 +197,7 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
     world.entities.destroyEntity(packet.entityId);
     snapshotBuffer.remove(packet.entityId);
     entityTypes.remove(packet.entityId);
+    chatBubbles.remove(packet.entityId);
   });
 
   // Player identity lifecycle — pid+nickname, separate from the generic entity lifecycle
@@ -160,6 +211,29 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
     nicknames.remove(packet.pid);
   });
 
+  // Round-trip latency measurement — see PingPacket/PongPacket's own doc comments and
+  // GameClient's sendPing()/onPong().
+  handlers.on(Opcode.Pong, (packet) => {
+    gameClient.onPong(packet.clientSendTime);
+  });
+
+  // ChatBroadcastPacket carries only pid (see its own doc comment) — resolve to entityId via
+  // NicknameRegistry (already pid-keyed internally) so the bubble attaches to the right
+  // player. Silently dropped if the pid isn't known yet (e.g. a race with PlayerJoin), same
+  // as PlayerRenderer already silently omitting a nickname it hasn't learned yet. The
+  // sender's own message is NOT pushed here — GameClient echoes it locally the instant it's
+  // sent (see sendChatMessage()), same as the reference client's immediate local echo,
+  // rather than waiting for this broadcast to round-trip back to the sender too.
+  handlers.on(Opcode.ChatBroadcast, (packet) => {
+    if (packet.pid === localPlayer.pid) {
+      return;
+    }
+    const entityId = nicknames.entityIdForPid(packet.pid);
+    if (entityId !== undefined) {
+      chatBubbles.push(entityId, packet.text);
+    }
+  });
+
   function connect(nickname: string, onRejected: (reason: RejectionReason) => void): void {
     handlers.on(Opcode.ConnectionRejected, (packet) => {
       onRejected(packet.reason);
@@ -169,5 +243,9 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
     });
   }
 
-  return { gameClient, connect };
+  function onSessionChange(listener: (active: boolean) => void): void {
+    sessionChangeListeners.push(listener);
+  }
+
+  return { gameClient, connect, onSessionChange };
 }

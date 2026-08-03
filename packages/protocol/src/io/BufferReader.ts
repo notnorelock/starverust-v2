@@ -35,6 +35,9 @@ let inProgress = false;
 const f32Scratch = new Float32Array(1);
 const f32ScratchBytes = new Uint8Array(f32Scratch.buffer);
 
+const f64Scratch = new Float64Array(1);
+const f64ScratchBytes = new Uint8Array(f64Scratch.buffer);
+
 export function beginRead(source: ArrayBuffer | Uint8Array): void {
   if (inProgress) {
     throw new ReadInProgressError();
@@ -104,6 +107,22 @@ export function readF32(): number {
   f32ScratchBytes[3] = b[c + 3]!;
   cursor += 4;
   return f32Scratch[0]!;
+}
+
+export function readF64(): number {
+  assertRemaining(8);
+  const b = bytes!;
+  const c = cursor;
+  f64ScratchBytes[0] = b[c]!;
+  f64ScratchBytes[1] = b[c + 1]!;
+  f64ScratchBytes[2] = b[c + 2]!;
+  f64ScratchBytes[3] = b[c + 3]!;
+  f64ScratchBytes[4] = b[c + 4]!;
+  f64ScratchBytes[5] = b[c + 5]!;
+  f64ScratchBytes[6] = b[c + 6]!;
+  f64ScratchBytes[7] = b[c + 7]!;
+  cursor += 8;
+  return f64Scratch[0]!;
 }
 
 /**

@@ -33,6 +33,13 @@ let inProgress = false;
 const f32Scratch = new Float32Array(1);
 const f32ScratchBytes = new Uint8Array(f32Scratch.buffer);
 
+// Same reinterpret-through-a-typed-array-view trick as f32Scratch above, sized for f64 —
+// used only by PingPacket's clientSendTime today (an opaque, sub-millisecond
+// performance.now()-based timestamp that would lose precision as f32 past ~4.6 hours of
+// page uptime; everything else in this protocol fits comfortably in f32).
+const f64Scratch = new Float64Array(1);
+const f64ScratchBytes = new Uint8Array(f64Scratch.buffer);
+
 export function beginWrite(initialCapacity = 64): void {
   if (inProgress) {
     throw new WriteInProgressError();
@@ -102,6 +109,21 @@ export function writeF32(value: number): void {
   bytes[c + 2] = f32ScratchBytes[2]!;
   bytes[c + 3] = f32ScratchBytes[3]!;
   cursor += 4;
+}
+
+export function writeF64(value: number): void {
+  ensureCapacity(8);
+  f64Scratch[0] = value;
+  const c = cursor;
+  bytes[c] = f64ScratchBytes[0]!;
+  bytes[c + 1] = f64ScratchBytes[1]!;
+  bytes[c + 2] = f64ScratchBytes[2]!;
+  bytes[c + 3] = f64ScratchBytes[3]!;
+  bytes[c + 4] = f64ScratchBytes[4]!;
+  bytes[c + 5] = f64ScratchBytes[5]!;
+  bytes[c + 6] = f64ScratchBytes[6]!;
+  bytes[c + 7] = f64ScratchBytes[7]!;
+  cursor += 8;
 }
 
 /**

@@ -1,14 +1,21 @@
 import { Logger, type World } from '@starve/shared';
-import { encodePlayerInput, encodePlayerAngle } from '@starve/protocol';
+import { encodePlayerInput, encodePlayerAngle, encodePing, encodeChatMessage } from '@starve/protocol';
 import type { NetworkClient } from '../network/NetworkClient';
 import type { KeyboardInputSource } from '../input/KeyboardInputSource';
 import type { MouseAngleInputSource } from '../input/MouseAngleInputSource';
 import type { DebugOverlay } from '../debug/DebugOverlay';
 import type { SnapshotBuffer } from '../network/SnapshotBuffer';
+import type { ChatBubbleStore } from '../network/ChatBubbleStore';
 import type { LocalPlayerDataStore } from './LocalPlayerDataStore';
 import { ClientClock } from './ClientClock';
 
 const logger = new Logger('GameClient');
+
+/** How often a PingPacket is sent to measure round-trip latency — see sendPing()/onPong(). */
+const PING_INTERVAL_MS = 5000;
+
+/** How often the debug overlay's packets-in/packets-out counters are refreshed — see trackPacketRates(). */
+const PACKET_RATE_WINDOW_MS = 1000;
 
 /**
  * Composition root for the browser client: owns the render loop (requestAnimationFrame,
@@ -44,6 +51,17 @@ export class GameClient {
   private animationFrameHandle: number | undefined;
   private unsubscribeDirection: (() => void) | undefined;
   private unsubscribeAngle: (() => void) | undefined;
+  private pingIntervalHandle: ReturnType<typeof setInterval> | undefined;
+  private pingMs: number | undefined;
+  private packetsInPerSecond = 0;
+  private packetsOutPerSecond = 0;
+  private bytesInPerSecond = 0;
+  private bytesOutPerSecond = 0;
+  private packetRateWindowStart = 0;
+  private packetsInAtWindowStart = 0;
+  private packetsOutAtWindowStart = 0;
+  private bytesInAtWindowStart = 0;
+  private bytesOutAtWindowStart = 0;
 
   constructor(
     private readonly world: World,
@@ -53,6 +71,7 @@ export class GameClient {
     private readonly snapshotBuffer: SnapshotBuffer,
     private readonly debugOverlay: DebugOverlay,
     private readonly localPlayer: LocalPlayerDataStore,
+    private readonly chatBubbles: ChatBubbleStore,
   ) {}
 
   /** Starts local simulation/rendering/input only — no network. Safe to call before a nickname exists. */
@@ -65,7 +84,12 @@ export class GameClient {
     this.unsubscribeAngle = this.mouseAngleInput.onChange((angle) => this.sendAngle(angle));
 
     this.fpsWindowStart = performance.now();
+    this.packetRateWindowStart = performance.now();
     this.animationFrameHandle = requestAnimationFrame((t) => this.frame(t));
+
+    // sendPing() itself no-ops while disconnected (same guard as sendDirection/sendAngle),
+    // so it's safe to start this interval immediately rather than waiting for connect().
+    this.pingIntervalHandle = setInterval(() => this.sendPing(), PING_INTERVAL_MS);
 
     logger.info('Client started');
   }
@@ -74,12 +98,54 @@ export class GameClient {
     if (this.animationFrameHandle !== undefined) {
       cancelAnimationFrame(this.animationFrameHandle);
     }
+    if (this.pingIntervalHandle !== undefined) {
+      clearInterval(this.pingIntervalHandle);
+    }
     this.unsubscribeDirection?.();
     this.unsubscribeAngle?.();
   }
 
   onServerTick(tick: number): void {
     this.lastServerTick = tick;
+  }
+
+  /** Registered by ClientBootstrap against Opcode.Pong — see sendPing()'s own doc comment. */
+  onPong(clientSendTime: number): void {
+    this.pingMs = performance.now() - clientSendTime;
+  }
+
+  /**
+   * Called by ChatBox (see @starve/ui) whenever its open/closed state changes — ported from
+   * the reference client's `user.chat.open` flag gating movement sampling (see
+   * client-old.js's `if (user.chat.open) return;` early-return in its move-update code).
+   * This project implements the same effect at the source instead (see
+   * KeyboardInputSource.setEnabled's own doc comment for why): disabling movement key
+   * capture while chat is open means WASD typed as chat text never reaches the movement
+   * system, and any keys already held when chat opens are released immediately (a synthetic
+   * "stop" is sent) rather than the player continuing to walk on the server until they
+   * happen to release the key mid-conversation.
+   */
+  setChatOpen(open: boolean): void {
+    this.keyboardInput.setEnabled(!open);
+  }
+
+  /**
+   * Sends `text` as a ChatMessagePacket and immediately echoes it as a bubble above the
+   * local player's own entity — mirroring the reference client's `send_chat()`, which pushes
+   * the message onto the sender's own bubble queue synchronously rather than waiting for the
+   * server's broadcast to round-trip back (see ClientBootstrap's ChatBroadcast handler,
+   * which explicitly skips re-pushing a bubble for packets carrying the local player's own
+   * pid, for exactly this reason — this local echo is the only place that entity's own sent
+   * messages get queued).
+   */
+  sendChatMessage(text: string): void {
+    if (!this.networkClient.isConnected) {
+      return;
+    }
+    this.networkClient.send(encodeChatMessage({ text }));
+    if (this.localPlayer.entityId !== undefined) {
+      this.chatBubbles.push(this.localPlayer.entityId, text);
+    }
   }
 
   private sendDirection(direction: number): void {
@@ -102,11 +168,27 @@ export class GameClient {
     this.networkClient.send(encodePlayerAngle({ angle }));
   }
 
+  /**
+   * Fired every PING_INTERVAL_MS (5s) by the interval started in start(). Carries
+   * performance.now() as an opaque timestamp the server echoes back verbatim in the
+   * matching PongPacket (see onPong()) — this is purely round-trip latency measurement,
+   * not gameplay state, so it's on its own fixed timer rather than piggybacking on any
+   * existing event-driven send (unlike PlayerInput/PlayerAngle, there's no "change" to
+   * wait for here).
+   */
+  private sendPing(): void {
+    if (!this.networkClient.isConnected) {
+      return;
+    }
+    this.networkClient.send(encodePing({ clientSendTime: performance.now() }));
+  }
+
   private frame(now: number): void {
     const dt = this.clock.tick(now);
     this.world.update(dt);
     this.mouseAngleInput.poll(dt);
     this.trackFps(now);
+    this.trackPacketRates(now);
 
     // dt=0: this is a read-only re-sample for the debug overlay after RenderSystem (part
     // of world.update() above) already advanced the real chase-and-snap for this frame —
@@ -117,13 +199,17 @@ export class GameClient {
     this.debugOverlay.update({
       fps: this.fps,
       serverTick: this.lastServerTick,
-      pingMs: 0,
+      pingMs: this.pingMs,
       entityCount: sampled.length,
       // Debug-only: shows the local player's world position so camera behavior (follow,
       // easing, bounds clamping) can be sanity-checked directly against a number instead
       // of eyeballing the canvas. Undefined until Handshake assigns localPlayer.entityId
       // and at least one snapshot has arrived for it.
       playerPosition: localPlayerPosition ? { x: localPlayerPosition.x, y: localPlayerPosition.y } : undefined,
+      packetsInPerSecond: this.packetsInPerSecond,
+      packetsOutPerSecond: this.packetsOutPerSecond,
+      bytesInPerSecond: this.bytesInPerSecond,
+      bytesOutPerSecond: this.bytesOutPerSecond,
     });
 
     this.animationFrameHandle = requestAnimationFrame((t) => this.frame(t));
@@ -136,5 +222,35 @@ export class GameClient {
       this.fpsAccumulator = 0;
       this.fpsWindowStart = now;
     }
+  }
+
+  /**
+   * Diffs NetworkClient's lifetime send/receive/byte counters against their values at the
+   * start of the current window to produce packets-per-second and bytes-per-second rates,
+   * refreshed once every PACKET_RATE_WINDOW_MS (1s) — the same "accumulate, then rate on a
+   * timed window" shape as trackFps() above, just keyed off NetworkClient's counters
+   * instead of a local one.
+   */
+  private trackPacketRates(now: number): void {
+    if (now - this.packetRateWindowStart < PACKET_RATE_WINDOW_MS) {
+      return;
+    }
+
+    const elapsedSeconds = (now - this.packetRateWindowStart) / 1000;
+    const totalPacketsIn = this.networkClient.totalPacketsReceived;
+    const totalPacketsOut = this.networkClient.totalPacketsSent;
+    const totalBytesIn = this.networkClient.totalBytesReceived;
+    const totalBytesOut = this.networkClient.totalBytesSent;
+
+    this.packetsInPerSecond = Math.round((totalPacketsIn - this.packetsInAtWindowStart) / elapsedSeconds);
+    this.packetsOutPerSecond = Math.round((totalPacketsOut - this.packetsOutAtWindowStart) / elapsedSeconds);
+    this.bytesInPerSecond = (totalBytesIn - this.bytesInAtWindowStart) / elapsedSeconds;
+    this.bytesOutPerSecond = (totalBytesOut - this.bytesOutAtWindowStart) / elapsedSeconds;
+
+    this.packetsInAtWindowStart = totalPacketsIn;
+    this.packetsOutAtWindowStart = totalPacketsOut;
+    this.bytesInAtWindowStart = totalBytesIn;
+    this.bytesOutAtWindowStart = totalBytesOut;
+    this.packetRateWindowStart = now;
   }
 }

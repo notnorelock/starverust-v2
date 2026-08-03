@@ -13,6 +13,8 @@ export enum Opcode {
   Hello = 0x00,
   Handshake = 0x01,
   ConnectionRejected = 0x02,
+  Ping = 0x03,
+  Pong = 0x04,
   PlayerInput = 0x10,
   PlayerAngle = 0x11,
   WorldSnapshot = 0x20,
@@ -21,4 +23,6 @@ export enum Opcode {
   EntityUpdate = 0x23,
   PlayerJoin = 0x24,
   PlayerLeft = 0x25,
+  ChatMessage = 0x50,
+  ChatBroadcast = 0x51,
 }

@@ -1,5 +1,6 @@
 import { render } from 'solid-js/web';
 import { WelcomeOverlay, type WelcomeOverlayProps } from './components/WelcomeOverlay';
+import { ChatBox, type ChatBoxProps } from './components/ChatBox';
 
 /**
  * Mounts WelcomeOverlay into `container` and returns an unmount function — wraps
@@ -10,4 +11,15 @@ import { WelcomeOverlay, type WelcomeOverlayProps } from './components/WelcomeOv
  */
 export function mountWelcomeOverlay(container: HTMLElement, props: WelcomeOverlayProps): () => void {
   return render(() => <WelcomeOverlay {...props} />, container);
+}
+
+/**
+ * Mounts ChatBox into `container` and returns an unmount function — same wrapping reasoning
+ * as mountWelcomeOverlay() above. Unlike the welcome overlay (mounted/unmounted repeatedly
+ * across connection attempts), this is meant to be mounted once, permanently, alongside the
+ * rest of the UI root — ChatBox's own open/closed visual state (not DOM mount state) is what
+ * toggles as the player opens and closes it.
+ */
+export function mountChatBox(container: HTMLElement, props: ChatBoxProps): () => void {
+  return render(() => <ChatBox {...props} />, container);
 }

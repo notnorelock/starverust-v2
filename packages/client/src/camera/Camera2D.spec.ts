@@ -94,4 +94,31 @@ describe('Camera2D', () => {
     expect(camera.x).toBeLessThanOrEqual(100);
     expect(camera.x).toBeGreaterThanOrEqual(-100);
   });
+
+  describe('resize', () => {
+    it('updates worldToScreen centering to the new viewport size', () => {
+      const camera = new Camera2D(800, 600);
+      camera.follow(0, 0);
+      settle(camera);
+
+      camera.resize(1600, 1200);
+
+      const screen = camera.worldToScreen(0, 0);
+      expect(screen.x).toBeCloseTo(800, 5); // new width / 2, not the stale 800/2 = 400
+      expect(screen.y).toBeCloseTo(600, 5); // new height / 2, not the stale 600/2 = 300
+    });
+
+    it('updates the boundary clamp half-extent used by follow()', () => {
+      const camera = new Camera2D(800, 600);
+      camera.setBounds({ minX: -1000, maxX: 1000, minY: -1000, maxY: 1000 });
+
+      camera.resize(400, 600); // half-width shrinks from 400 to 200
+
+      camera.follow(1000, 0);
+      settle(camera);
+
+      const halfWidthAfterResize = 400 / 2;
+      expect(camera.x).toBeCloseTo(1000 - halfWidthAfterResize, 5);
+    });
+  });
 });

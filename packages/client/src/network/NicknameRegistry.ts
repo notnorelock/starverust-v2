@@ -30,4 +30,14 @@ export class NicknameRegistry {
   get(entityId: number): string | undefined {
     return this.nicknameByEntityId.get(entityId);
   }
+
+  /**
+   * Resolves a pid to its entityId — used by ChatBroadcastPacket's handler (see
+   * ClientBootstrap) to attach an incoming chat message to the right player's entity for
+   * bubble rendering, since that packet carries only pid (see its own doc comment).
+   * Returns undefined if this pid hasn't been learned yet (e.g. PlayerJoin hasn't arrived).
+   */
+  entityIdForPid(pid: number): number | undefined {
+    return this.entityIdByPid.get(pid);
+  }
 }

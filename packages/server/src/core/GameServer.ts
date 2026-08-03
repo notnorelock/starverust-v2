@@ -1,5 +1,5 @@
 import { FixedTimestepLoop, Logger, World } from '@starve/shared';
-import type { HelloPacket } from '@starve/protocol';
+import type { HelloPacket, ChatMessagePacket } from '@starve/protocol';
 import type { Kysely } from 'kysely';
 import type { EnvConfig } from '../utils/EnvConfig';
 import { createServerWorld } from '../world/ServerWorldFactory';
@@ -9,6 +9,7 @@ import { PacketRouter } from '../network/PacketRouter';
 import type { ClientConnection } from '../network/ClientConnection';
 import { PlayerRepository } from '../database/repositories/PlayerRepository';
 import { onConnectionClosed, onHelloReceived } from '../players/PlayerSession';
+import { onChatMessageReceived } from '../chat/ChatSession';
 import { EventBus } from '../events/EventBus';
 import { buildTickPipeline } from './TickPipeline';
 import { NETWORK_SERVICE, CONNECTION_REGISTRY, PLAYER_REPOSITORY, EVENT_BUS } from './ServiceKeys';
@@ -51,7 +52,10 @@ export class GameServer {
     this.gateway = new WebSocketGateway({
       port: config.port,
       connectionRegistry: this.connectionRegistry,
-      packetRouter: new PacketRouter({ onHello: (connection, hello) => this.handleHello(connection, hello) }),
+      packetRouter: new PacketRouter({
+        onHello: (connection, hello) => this.handleHello(connection, hello),
+        onChatMessage: (connection, message) => this.handleChatMessage(connection, message),
+      }),
       onConnect: (connection) => this.handleConnect(connection),
       onDisconnect: (connection) => this.handleDisconnect(connection),
     });
@@ -106,5 +110,9 @@ export class GameServer {
 
   private handleDisconnect(connection: ClientConnection): void {
     onConnectionClosed(connection, this.world, this.gateway);
+  }
+
+  private handleChatMessage(connection: ClientConnection, message: ChatMessagePacket): void {
+    onChatMessageReceived(connection, message, this.gateway);
   }
 }

@@ -17,6 +17,8 @@ function createWorld(): World {
   return new World({ services: new ServiceContainer() });
 }
 
+const noNicknames = (): undefined => undefined;
+
 describe('serializeWorldSnapshot', () => {
   it('encodes every entity with a PositionComponent into a decodable WorldSnapshotPacket', () => {
     const world = createWorld();
@@ -25,7 +27,7 @@ describe('serializeWorldSnapshot', () => {
     world.entities.addComponent(a.id, PositionComponent, new PositionComponent(a.id, 1, 2));
     world.entities.addComponent(b.id, PositionComponent, new PositionComponent(b.id, -5, 10));
 
-    const buffer = serializeWorldSnapshot(world, 42);
+    const buffer = serializeWorldSnapshot(world, 42, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     expect(decoded.opcode).toBe(Opcode.WorldSnapshot);
@@ -41,7 +43,7 @@ describe('serializeWorldSnapshot', () => {
     const world = createWorld();
     world.entities.createEntity(); // no components attached
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {
@@ -60,7 +62,7 @@ describe('serializeWorldSnapshot', () => {
       new RenderPositionComponent(entity.id, 7, 3), // smoothed position, still trailing the target
     );
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {
@@ -74,6 +76,7 @@ describe('serializeWorldSnapshot', () => {
       y: 3,
       speed: 0,
       angle: 0,
+      nickname: '',
     });
   });
 
@@ -82,7 +85,7 @@ describe('serializeWorldSnapshot', () => {
     const entity = world.entities.createEntity();
     world.entities.addComponent(entity.id, PositionComponent, new PositionComponent(entity.id, 42, -8));
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {
@@ -96,6 +99,7 @@ describe('serializeWorldSnapshot', () => {
       y: -8,
       speed: 0,
       angle: 0,
+      nickname: '',
     });
   });
 
@@ -105,7 +109,7 @@ describe('serializeWorldSnapshot', () => {
     world.entities.addComponent(entity.id, PositionComponent, new PositionComponent(entity.id, 0, 0));
     world.entities.addComponent(entity.id, VelocityComponent, new VelocityComponent(entity.id, 3, 4));
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {
@@ -123,7 +127,7 @@ describe('serializeWorldSnapshot', () => {
     const noType = world.entities.createEntity();
     world.entities.addComponent(noType.id, PositionComponent, new PositionComponent(noType.id, 0, 0));
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {
@@ -144,7 +148,7 @@ describe('serializeWorldSnapshot', () => {
     const unowned = world.entities.createEntity();
     world.entities.addComponent(unowned.id, PositionComponent, new PositionComponent(unowned.id, 0, 0));
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {
@@ -156,6 +160,42 @@ describe('serializeWorldSnapshot', () => {
     expect(unownedEntity.ownerPid).toBe(0);
   });
 
+  it('resolves nickname via nicknameForPid for owned entities, falling back to empty string for unowned entities', () => {
+    const world = createWorld();
+    const owned = world.entities.createEntity();
+    world.entities.addComponent(owned.id, PositionComponent, new PositionComponent(owned.id, 0, 0));
+    world.entities.addComponent(owned.id, EntityOwnerComponent, new EntityOwnerComponent(owned.id, 5));
+
+    const unowned = world.entities.createEntity();
+    world.entities.addComponent(unowned.id, PositionComponent, new PositionComponent(unowned.id, 0, 0));
+
+    const buffer = serializeWorldSnapshot(world, 0, (pid) => (pid === 5 ? 'Alice' : undefined));
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    const ownedEntity = decoded.packet.entities.find((e) => e.entityId === owned.id)!;
+    const unownedEntity = decoded.packet.entities.find((e) => e.entityId === unowned.id)!;
+    expect(ownedEntity.nickname).toBe('Alice');
+    expect(unownedEntity.nickname).toBe('');
+  });
+
+  it('falls back to empty string when nicknameForPid returns undefined for an owned entity', () => {
+    const world = createWorld();
+    const owned = world.entities.createEntity();
+    world.entities.addComponent(owned.id, PositionComponent, new PositionComponent(owned.id, 0, 0));
+    world.entities.addComponent(owned.id, EntityOwnerComponent, new EntityOwnerComponent(owned.id, 5));
+
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    expect(decoded.packet.entities[0]!.nickname).toBe('');
+  });
+
   it('broadcasts angle from AimComponent, falling back to 0 when absent', () => {
     const world = createWorld();
     const aiming = world.entities.createEntity();
@@ -165,7 +205,7 @@ describe('serializeWorldSnapshot', () => {
     const noAim = world.entities.createEntity();
     world.entities.addComponent(noAim.id, PositionComponent, new PositionComponent(noAim.id, 0, 0));
 
-    const buffer = serializeWorldSnapshot(world, 0);
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
     const decoded = decodeAny(finalizeForWire(buffer));
 
     if (decoded.opcode !== Opcode.WorldSnapshot) {

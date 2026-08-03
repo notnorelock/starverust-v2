@@ -52,4 +52,24 @@ describe('NicknameRegistry', () => {
     // rather than asserting a guarantee; remove() is the only cleanup path today.
     expect(registry.get(10)).toBe('Alice');
   });
+
+  describe('entityIdForPid', () => {
+    it('returns undefined for a pid whose entityId is unknown', () => {
+      const registry = new NicknameRegistry();
+      expect(registry.entityIdForPid(5)).toBeUndefined();
+    });
+
+    it('resolves a known pid to its entityId', () => {
+      const registry = new NicknameRegistry();
+      registry.insert(5, 7, 'Survivor');
+      expect(registry.entityIdForPid(5)).toBe(7);
+    });
+
+    it('returns undefined after the pid is removed', () => {
+      const registry = new NicknameRegistry();
+      registry.insert(5, 7, 'Survivor');
+      registry.remove(5);
+      expect(registry.entityIdForPid(5)).toBeUndefined();
+    });
+  });
 });
