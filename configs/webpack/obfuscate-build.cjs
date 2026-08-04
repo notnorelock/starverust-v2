@@ -63,9 +63,24 @@ const domprops = require('./domprops.cjs');
  *   scope boundary itself... actually ui's .ts *is* compiled (it's part of the same
  *   Program via tsconfig.webpack.json's own "include"), just not eligible for rewriting
  *   unless explicitly added to scopeRoots.
+ * @param {number} [config.decoyFieldCount] optional, default 0 (no decoys). Forwarded
+ *   straight to createObfuscationTransformer's own decoyFieldCount parameter — see that
+ *   function's doc comment in obfuscate-properties.transformer.cjs for what this adds
+ *   (fake, never-read `PropertyDeclaration` members appended to every in-scope class, purely
+ *   as noise on a dumped instance's shape).
+ * @param {number} [config.decoyMethodCount] optional, default 0 (no decoy methods).
+ *   Forwarded straight to createObfuscationTransformer's own decoyMethodCount parameter —
+ *   requires decoyFieldCount > 0 too (a decoy method's body always reads a decoy field).
  * @returns {{ outDir: string, rootDir: string }}
  */
-function runObfuscationPrepass({ tsconfigPath, outDir, scopeRoots, mirrorRoots }) {
+function runObfuscationPrepass({
+  tsconfigPath,
+  outDir,
+  scopeRoots,
+  mirrorRoots,
+  decoyFieldCount = 0,
+  decoyMethodCount = 0,
+}) {
   const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
   if (configFile.error) {
     throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n'));
@@ -111,7 +126,22 @@ function runObfuscationPrepass({ tsconfigPath, outDir, scopeRoots, mirrorRoots }
   // this does and does not achieve (the real DOM property name is unchanged at runtime;
   // only the static identifier is removed from the bundle's source text).
   const isDomProp = createDomPropChecker(domprops);
-  const transformer = createObfuscationTransformer(getProgram, isInScope, isDomProp);
+  // Bare global identifiers (new WebSocket(...), window.innerWidth, document.createElement,
+  // requestAnimationFrame(...), ...) go through the SAME domprops.cjs name list — a global
+  // constructor/API name has no different confidentiality need than a property name, and
+  // domprops.cjs already lists both kinds of name together (see createDomPropChecker() and
+  // createObfuscationTransformer()'s own isGlobalName parameter doc comment for the AST-shape
+  // difference: a bare Identifier expression, not a PropertyAccessExpression, so it needs its
+  // own eligibility path — isEligibleGlobalIdentifier() — even though the name list is shared).
+  const isGlobalName = isDomProp;
+  const transformer = createObfuscationTransformer(
+    getProgram,
+    isInScope,
+    isDomProp,
+    isGlobalName,
+    decoyFieldCount,
+    decoyMethodCount,
+  );
 
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });

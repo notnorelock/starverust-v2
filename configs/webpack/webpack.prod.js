@@ -3,6 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const webpack = require('webpack');
 const { merge } = require('webpack-merge');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
@@ -13,6 +14,7 @@ const domprops = require('./domprops.cjs');
 const solidDelegatedEvents = require('./solid-delegated-events.cjs');
 const { runObfuscationPrepass } = require('./obfuscate-build.cjs');
 const { escapeStringLiterals } = require('./obfuscate-strings.cjs');
+const { GLOBAL_OBJECT_IDENTIFIER } = require('./obfuscate-properties.cjs');
 
 /**
  * @param {string} packageRoot
@@ -50,6 +52,26 @@ function createProdConfig(packageRoot) {
       path.join(packageRoot, '../shared/src'),
       path.join(packageRoot, '../ui/src'),
     ],
+    // MAX of a per-class random range (each class independently rolls ~60-100% of this —
+    // see randomCountInRange() in obfuscate-properties.transformer.cjs) of fake, never-read
+    // PropertyDeclaration/MethodDeclaration members spliced at random positions among every
+    // in-scope class's real members — see generateDecoyMembers() in obfuscate-properties.cjs
+    // for the name/value/body pools and createObfuscationTransformer's decoyFieldCount/
+    // decoyMethodCount parameters in obfuscate-properties.transformer.cjs for the
+    // collision-safety and position-randomization details. Purely cosmetic noise on a dumped
+    // instance's shape (e.g. in a devtools object inspector) — nothing in this codebase ever
+    // calls a decoy method or reads a decoy field, so this cannot change program behavior;
+    // it does not hide or slow down anyone reading the actual network protocol, render loop,
+    // or physics code. At this count expect a real bundle-size increase (dozens of KB) and
+    // a runtime cost to instantiating decorated classes (large, varied object shapes hurt
+    // V8's hidden-class/inline-cache optimizations) — deliberately accepted here per an
+    // explicit choice to prioritize decoy volume over bundle size/perf. Deliberately no fake
+    // CONTROL FLOW (dead/opaque branches spliced into real method bodies) — this codebase
+    // has strict tick/ordering invariants (see CLAUDE.md's PhysicsSystem/MovementSystem/CCD
+    // notes) that make that kind of injection too risky for the payoff, so decoys stay
+    // limited to inert, never-invoked static members regardless of count.
+    decoyFieldCount: 30,
+    decoyMethodCount: 20,
   });
   // Where packageRoot/src ended up inside the mirrored obfuscated tree — entry/resolve below
   // need to point INTO the obfuscated copy, not the original source, for the client's own
@@ -115,6 +137,24 @@ function createProdConfig(packageRoot) {
       }),
       new MiniCssExtractPlugin({
         filename: '[name].[contenthash].css',
+      }),
+      // Provides `_gbl` as a free identifier to every module that references it, auto-
+      // injecting an import from obfuscate-global-runtime.js — the same standard webpack
+      // mechanism used for legacy `$`/`Buffer`/`process` shims. This is what backs
+      // createObfuscationTransformer's bare-global-identifier rewrite (see
+      // obfuscate-properties.transformer.cjs's isEligibleGlobalIdentifier —
+      // `new WebSocket(...)` becomes `new _gbl[$T(i)](...)`, etc.): rather than each
+      // obfuscated file synthesizing its own `var _gbl = (try/catch chain)` (an earlier
+      // version did this — one redundant three-branch try/catch evaluated per file, ~30
+      // times in a typical build, all resolving to the identical globalThis object),
+      // ProvidePlugin resolves the module ONCE for the whole bundle and every consumer gets
+      // the same reference. obfuscate-global-runtime.js itself is deliberately outside every
+      // scopeRoots the obfuscation pre-pass uses, so its own globalThis/window/global/self
+      // references are never themselves rewritten (that would be circular — it's the one
+      // place that has to name them for real).
+      new webpack.ProvidePlugin({
+        [GLOBAL_OBJECT_IDENTIFIER]: require.resolve('./obfuscate-global-runtime.js'),
+        // [GLOBAL_OBJECT_IDENTIFIER]: "global"
       }),
       // .css/.scss imports inside the mirrored obfuscated tree are byte-identical COPIES of
       // the real files (see runObfuscationPrepass — stylesheets are never rewritten, only
@@ -221,10 +261,7 @@ function createProdConfig(packageRoot) {
               toplevel: true,
               drop_console: false,
               drop_debugger: true,
-              join_vars: false,
-              hoist_funs: true,
-              hoist_vars: true,
-              hoist_props: true,
+              join_vars: false
             },
             mangle: {
               toplevel: true,

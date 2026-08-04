@@ -1,6 +1,12 @@
 // @ts-check
 const ts = require('typescript');
-const { NameRegistry, buildEncodedTableStatements, DECODE_FN_IDENTIFIER } = require('./obfuscate-properties.cjs');
+const {
+  NameRegistry,
+  buildEncodedTableStatements,
+  generateDecoyMembers,
+  DECODE_FN_IDENTIFIER,
+  GLOBAL_OBJECT_IDENTIFIER,
+} = require('./obfuscate-properties.cjs');
 
 /**
  * The actual ts.TransformerFactory — see obfuscate-properties.cjs for the overall design
@@ -18,7 +24,10 @@ const { NameRegistry, buildEncodedTableStatements, DECODE_FN_IDENTIFIER } = requ
  *   - ShorthandPropertyAssignment         ({ foo })    -> ({ [$T(i)]: foo })
  *   - BindingElement (object destructuring)  const { foo } = x       -> const { [$T(i)]: foo } = x
  *                                             const { foo: bar } = x -> const { [$T(i)]: bar } = x
+ *   - bare global Identifier (value position only)  WebSocket        -> _gbl[$T(i)]
+ *                                                    window.foo      -> _gbl[$T(j)].foo
  *
+
  * The BindingElement case matters more than it might look: an earlier version of this
  * transformer omitted it entirely, and the mismatch it created was NOT a runtime string
  * mismatch (a destructuring read like `const { onSessionChange } = x` still resolves the
@@ -115,9 +124,60 @@ const { NameRegistry, buildEncodedTableStatements, DECODE_FN_IDENTIFIER } = requ
  *   site (class field/method, object-literal key, destructuring binding) — see
  *   createDomPropChecker()'s own doc comment for why. Defaults to a checker that matches
  *   nothing, so omitting this parameter reproduces the exact previous behavior.
+ * @param {(name: string) => boolean} [isGlobalName] optional — same name list as isDomProp
+ *   (domprops.cjs already lists "WebSocket", "window", "document",
+ *   "requestAnimationFrame", etc. alongside property names), consulted for a completely
+ *   different AST shape: a BARE Identifier expression (`WebSocket`, not `obj.WebSocket`).
+ *   See isEligibleGlobalIdentifier() below for the full eligibility check (must resolve via
+ *   the checker to a value symbol declared OUTSIDE isInScope — i.e. actually the real
+ *   global, never a same-named local/parameter/import shadowing it). The replacement
+ *   `_gbl[$T(i)]` expression's `_gbl` is a free identifier this transformer never declares —
+ *   it's provided once for the whole bundle via webpack.ProvidePlugin (see
+ *   obfuscate-global-runtime.js and its registration in webpack.prod.js), not synthesized
+ *   per file. Defaults to a checker that matches nothing, so omitting this parameter
+ *   reproduces the exact previous behavior (no bare identifiers are ever rewritten).
+ * @param {number} [decoyFieldCount] optional, default 0 (no decoys, exact previous
+ *   behavior). When > 0, this is the MAX of a per-class random range — each in-scope class
+ *   independently rolls its own decoy field count via randomCountInRange() below (roughly
+ *   60%-100% of this max, so passing 100 yields ~60-100 decoy fields per class, not a flat
+ *   100 on every class), then gets that many extra fake `PropertyDeclaration` members
+ *   spliced in at random positions among its real members — see generateDecoyMembers() in
+ *   obfuscate-properties.cjs for the name/value pools and the ClassDeclaration visit case
+ *   below for the collision-safety and position-randomization details. Purely cosmetic
+ *   noise on a dumped instance's shape — nothing in this codebase ever reads a decoy field,
+ *   so there is no live behavior riding on this and no way it can change what the program
+ *   actually does.
+ * @param {number} [decoyMethodCount] optional, default 0 (no decoy methods). Same "max of a
+ *   per-class random range" semantics as decoyFieldCount (requires decoyFieldCount > 0 too —
+ *   a decoy method's body always reads decoy fields from the same batch, see
+ *   generateDecoyMembers()'s own doc comment). Each extra fake `MethodDeclaration` body is
+ *   one of a few shapes (a plain return, an if/else, or a switch — see bodyShapes in
+ *   generateDecoyMembers()) that ONLY ever reads this same decoy batch's own fields — never
+ *   a loop, never a call to anything real, never a write, never a reference to a real class
+ *   member. Same "purely cosmetic, never invoked, cannot change program behavior" guarantee
+ *   as decoyFieldCount — control flow is included here specifically because that
+ *   self-containment makes it safe; real (physics/render/network) method bodies are never
+ *   touched this way.
  * @returns {import('typescript').TransformerFactory<import('typescript').SourceFile>}
  */
-function createObfuscationTransformer(getProgram, isInScope, isDomProp = () => false) {
+function createObfuscationTransformer(
+  getProgram,
+  isInScope,
+  isDomProp = () => false,
+  isGlobalName = () => false,
+  decoyFieldCount = 0,
+  decoyMethodCount = 0,
+) {
+  /**
+   * Rolls a random integer count in [ceil(max * 0.6), max] — the "~60-100 typical" range
+   * this module's own decoyFieldCount/decoyMethodCount doc comments describe, parameterized
+   * by the caller-supplied max rather than hardcoded, so passing a smaller max (e.g. 10)
+   * still produces a proportional random range (6-10) instead of always maxing out.
+   */
+  function randomCountInRange(/** @type {number} */min_, /** @type {number} */ max) {
+    const min = Math.max(min_, Math.ceil(max * 0.6));
+    return min + Math.floor(Math.random() * (max - min + 1));
+  }
   /** True if `name` should never be touched regardless of scope (JS/TS structural reasons). */
   function isStructurallyExempt(/** @type {string} */ name) {
     // Computed-key syntax is legal for these too, but there is no obfuscation value in
@@ -184,6 +244,35 @@ function createObfuscationTransformer(getProgram, isInScope, isDomProp = () => f
   /** @type {(node) => boolean} */
   function hasDecorators(node) {
     return ts.canHaveDecorators(node) && (ts.getDecorators(node)?.length ?? 0) > 0;
+  }
+
+  /**
+   * Every member name reachable on instances of `classNode` — OWN declared members AND
+   * everything inherited from a base class/interface, via the checker's resolved type
+   * (`getPropertiesOfType()` walks the full inheritance chain, unlike reading
+   * `classNode.members` directly which only sees this one declaration's own members). Used
+   * exclusively to build the exclusion set generateDecoyFields() checks against: a decoy
+   * field must never reuse ANY name reachable on the class, own or inherited, or it would
+   * silently shadow a real field's value on every instance. Returns an empty Set (no decoys
+   * possible, but never throws) if the checker can't resolve a type here — e.g. the Program
+   * being mid-construction under ts-loader's transpileOnly mode, same caveat already
+   * documented on isEligibleSymbol() above.
+   */
+  function collectAllMemberNames(
+    /** @type {import('typescript').ClassDeclaration | import('typescript').ClassExpression} */ classNode,
+  ) {
+    /** @type {Set<string>} */
+    const names = new Set();
+    const program = getProgram();
+    if (!program) {
+      return names;
+    }
+    const checker = program.getTypeChecker();
+    const type = checker.getTypeAtLocation(classNode);
+    for (const symbol of checker.getPropertiesOfType(type)) {
+      names.add(symbol.getName());
+    }
+    return names;
   }
 
   /**
@@ -277,6 +366,52 @@ function createObfuscationTransformer(getProgram, isInScope, isDomProp = () => f
     return declarations.every(isRewritableDeclarationSite);
   }
 
+  /**
+   * True if `node` (a bare Identifier expression, e.g. the `WebSocket` in `new
+   * WebSocket(url)` or the `window` in `window.innerWidth`) resolves to the REAL global —
+   * declared OUTSIDE every scope root (lib.dom.d.ts, @types/node's ambient globals, etc.),
+   * never a local variable/parameter/import/class-member that merely shares the name.
+   *
+   * This is the OPPOSITE direction from isEligibleSymbol()/isRewritableDeclarationSite()
+   * above (which require the declaration to be INSIDE scope) — deliberately: a bare global's
+   * declaration can never be inside our own package roots by definition, it's not something
+   * this codebase declares. isDomProp()/isGlobalName() (the caller-supplied name-membership
+   * check, applied by the visit() switch below before this function is even called) is what
+   * keeps this from matching arbitrary out-of-scope symbols — this function only confirms
+   * that a NAME already known to be a real global name isn't shadowed at this specific
+   * location.
+   *
+   * ts.isPartOfTypeNode() excludes type-only positions (`type WS = WebSocket`, `x:
+   * WebSocket`) — the identifier there is a type reference, not a value read, and rewriting
+   * it to a runtime expression (`_gbl[$T(i)]`) would be invalid TypeScript at those
+   * positions (a computed lookup isn't a type). `typeof WebSocket` (a genuine runtime
+   * typeof-operator expression, not a type annotation) is NOT excluded by this check and IS
+   * eligible — verified directly that ts.isPartOfTypeNode() returns false for the operand of
+   * a TypeOfExpression, only true for an actual TypeReferenceNode's identifier.
+   */
+  function isEligibleGlobalIdentifier(/** @type {import('typescript').Identifier} */ node) {
+    if (ts.isPartOfTypeNode(node)) {
+      return false;
+    }
+    const program = getProgram();
+    if (!program) {
+      return false;
+    }
+    const symbol = program.getTypeChecker().getSymbolAtLocation(node);
+    if (!symbol) {
+      return false;
+    }
+    const declarations = symbol.getDeclarations();
+    if (!declarations || declarations.length === 0) {
+      return false;
+    }
+    // A shadowing local declares itself INSIDE scope (or, for a shadowing .tsx/.d.ts-free
+    // ambient case elsewhere in node_modules, simply isn't a value declared in a lib file at
+    // all) — either way, every declaration failing "is outside scope" means this occurrence
+    // is not the real global and must be left alone.
+    return declarations.every((decl) => !isInScope(decl.getSourceFile().fileName));
+  }
+
   /** @type {import('typescript').TransformerFactory<import('typescript').SourceFile>} */
   return (context) => {
     const { factory } = context;
@@ -309,6 +444,91 @@ function createObfuscationTransformer(getProgram, isInScope, isDomProp = () => f
               : factory.createElementAccessExpression(visitedExpression, key);
           }
           return factory.updatePropertyAccessExpression(node, visitedExpression, node.name);
+        }
+
+        // --- class declaration: splice decoy fields/methods among real members ----------
+        // Must intercept the ClassDeclaration itself (not just individual members) since
+        // this is the only point that can insert new members into node.members — the
+        // member-declaration case below only rewrites members that already exist. Runs
+        // BEFORE that case in source order so decoys aren't accidentally re-visited as if
+        // they were real members (they're spliced into the already-visited member list, not
+        // fed back through visit()).
+        //
+        // Both the COUNT (random per class, ~60-100 independently for fields and methods —
+        // see randomCountInRange() below) and the POSITION (each decoy is inserted at a
+        // uniformly random index among the real members, not appended at the end) are
+        // randomized. Position randomization is safe specifically because class field
+        // initializers run top-to-bottom in DECLARATION order regardless of where the
+        // constructor sits textually (verified directly: a field declared after the
+        // constructor still initializes correctly, right after the constructor runs, per
+        // the class-fields spec) — decoys never read or write anything but their own decoy
+        // state, so interleaving them anywhere cannot change when or how a REAL field
+        // initializes. The one invariant this code preserves deliberately: real members'
+        // RELATIVE order among themselves is never changed (only decoys are inserted between
+        // them) — permuting real members could break a real field whose initializer depends
+        // on an earlier real field (e.g. `b = this.a + 1`), which decoy insertion must never
+        // risk. Decoy METHODS are generated after decoy FIELDS (via generateDecoyMembers)
+        // so every decoy method's body can reference a decoy field that already exists,
+        // regardless of where either ends up after interleaving.
+        if ((ts.isClassDeclaration(node) || ts.isClassExpression(node)) && decoyFieldCount > 0) {
+          const visitedMembers = [...ts.visitNodes(node.members, visit, ts.isClassElement) ?? node.members];
+          const excludeNames = collectAllMemberNames(node);
+          const fieldCount = randomCountInRange(5, decoyFieldCount);
+          const methodCount = decoyMethodCount > 0 ? randomCountInRange(10, decoyMethodCount) : 0;
+          const { fields, methods } = generateDecoyMembers(
+            Math.random,
+            fieldCount,
+            methodCount,
+            excludeNames,
+            computedKeyFor,
+          );
+          const decoyFieldMembers = fields.map(({ name, value }) =>
+            factory.createPropertyDeclaration(
+              undefined,
+              factory.createComputedPropertyName(computedKeyFor(name)),
+              undefined,
+              undefined,
+              value,
+            ),
+          );
+          const decoyMethodMembers = methods.map(({ name, body }) =>
+            factory.createMethodDeclaration(
+              undefined,
+              undefined,
+              factory.createComputedPropertyName(computedKeyFor(name)),
+              undefined,
+              undefined,
+              [],
+              undefined,
+              factory.createBlock(body, true),
+            ),
+          );
+          // Insert each decoy at a uniformly random index into the growing member list — an
+          // insertion (not a swap) at each step, so real members are only ever pushed later
+          // in the array, never reordered relative to each other.
+          const mergedMembers = [...visitedMembers];
+          for (const decoyMember of [...decoyFieldMembers, ...decoyMethodMembers]) {
+            const insertAt = Math.floor(Math.random() * (mergedMembers.length + 1));
+            mergedMembers.splice(insertAt, 0, decoyMember);
+          }
+          const updatedMembers = factory.createNodeArray(mergedMembers);
+          return ts.isClassDeclaration(node)
+            ? factory.updateClassDeclaration(
+                node,
+                node.modifiers,
+                node.name,
+                node.typeParameters,
+                node.heritageClauses,
+                updatedMembers,
+              )
+            : factory.updateClassExpression(
+                node,
+                node.modifiers,
+                node.name,
+                node.typeParameters,
+                node.heritageClauses,
+                updatedMembers,
+              );
         }
 
         // --- class field / method / accessor declarations --------------------------------
@@ -372,6 +592,28 @@ function createObfuscationTransformer(getProgram, isInScope, isDomProp = () => f
           return ts.visitEachChild(node, visit, context);
         }
 
+        // --- bare global identifier: WebSocket / window / document / etc. ---------------
+        // Deliberately the LAST specific case checked, after every other node kind that
+        // itself contains or IS an Identifier (PropertyAccessExpression's own .name,
+        // declaration names) has already been handled and returned above — this only ever
+        // sees an Identifier reached as a genuine value-reading EXPRESSION position (a
+        // callee, an operand, an argument, etc.), never a name/declaration slot, since
+        // those never fall through to here. See isEligibleGlobalIdentifier()'s own doc
+        // comment for the shadowing/type-position exclusions.
+        if (ts.isIdentifier(node)) {
+          const name = node.text;
+          if (!isStructurallyExempt(name) && isGlobalName(name) && isEligibleGlobalIdentifier(node)) {
+            // `_gbl` is a free identifier here, never declared by this transformer — see
+            // this function's own isGlobalName doc comment for why (provided once for the
+            // whole bundle via webpack.ProvidePlugin, not synthesized per file).
+            return factory.createElementAccessExpression(
+              factory.createIdentifier(GLOBAL_OBJECT_IDENTIFIER),
+              computedKeyFor(name),
+            );
+          }
+          return node;
+        }
+
         return ts.visitEachChild(node, visit, context);
       }
 
@@ -388,6 +630,12 @@ function createObfuscationTransformer(getProgram, isInScope, isDomProp = () => f
       // output because parsed nodes carry real text-range positions into their OWN source
       // string that collide with this file's positions).
       const tableStatements = buildEncodedTableStatements(factory, rewrittenNames);
+      // No `_gbl` statement injected here — unlike the string table, `_gbl` is never
+      // per-file. It's a free identifier provided once for the whole bundle via
+      // webpack.ProvidePlugin (see obfuscate-global-runtime.js and its registration in
+      // webpack.prod.js), so any file whose visit() rewrote a bare global to `_gbl[$T(i)]`
+      // above just references that free identifier directly — ProvidePlugin detects the
+      // reference and auto-injects the import, the same mechanism as a `$`/`Buffer` shim.
       return factory.updateSourceFile(visited, [...tableStatements, ...visited.statements]);
     };
   };

@@ -46,6 +46,41 @@ const ts = require('typescript');
  * index 3 in file B can safely decode to different names — there's no cross-file coupling to
  * get wrong. The only cost is some duplicated numeric-array literals across files, which
  * Terser's own dedup/compression passes shrink further downstream anyway.
+ *
+ * BARE GLOBAL IDENTIFIERS (`WebSocket`, `window`, `document`, `requestAnimationFrame`, ...)
+ * get the same treatment through a second mechanism layered on top: see
+ * isEligibleGlobalIdentifier() in obfuscate-properties.transformer.cjs. A bare identifier is
+ * a different AST shape from a property access (`WebSocket` vs `obj.WebSocket`), so it can't
+ * go through the `obj[$T(i)]` rewrite above directly — there is no `obj` to rewrite. Instead
+ * every genuine bare-global reference (verified by the checker to resolve OUTSIDE every scope
+ * root, never a local/shadowing declaration — see isEligibleGlobalIdentifier()'s own doc
+ * comment) becomes `_gbl[$T(i)]`, reusing the SAME per-file `$T(i)` name table as property
+ * names (no second XOR table — a global name has no different confidentiality need than a
+ * property name). `new WebSocket(...)` becomes `new _gbl[$T(i)](...)`, `window.innerWidth`
+ * becomes `_gbl[$T(j)].innerWidth` (the `.innerWidth` part is separately handled by the
+ * existing DOM-prop property-access path above), and so on.
+ *
+ * `_gbl` ITSELF is NOT synthesized per file (an earlier version injected a `var _gbl =
+ * (try/catch chain)` statement into every file that referenced a bare global, which meant the
+ * identical three-branch try/catch ran once per FILE — 32 times in a typical build — all
+ * resolving to the same object for no benefit). Instead `_gbl` is provided exactly once for
+ * the whole bundle via `webpack.ProvidePlugin` (see its registration in webpack.prod.js),
+ * pointing at obfuscate-global-runtime.js — a plain, never-obfuscated module (deliberately
+ * outside every scopeRoots) that resolves the host global object once. Every obfuscated file
+ * simply references the free identifier `_gbl`; webpack's ProvidePlugin auto-injects the
+ * import for it, the same standard mechanism used for legacy `$`/`Buffer`/`process` shims.
+ *
+ * DECOY FIELDS AND METHODS (see generateDecoyFields()/generateDecoyMembers() below) inject
+ * fake, never-real class members — including, as of generateDecoyMembers()'s bodyShapes,
+ * fake CONTROL FLOW (if/else, switch) inside decoy method bodies. This is deliberately
+ * scoped to ONLY decoy methods, never real ones: a decoy method's body is provably
+ * self-contained (reads only this same decoy batch's own fields, calls nothing, writes
+ * nothing), so an opaque/dead branch inside it can never diverge based on anything a real
+ * caller does. Splicing opaque/dead branches into REAL method bodies (physics, rendering,
+ * networking) was considered and rejected — this codebase has strict tick/ordering
+ * invariants (see CLAUDE.md's PhysicsSystem/MovementSystem/CCD notes) that an AST-level
+ * "this branch is unreachable" proof cannot reliably verify, and a wrong proof there ships
+ * a real bug, not just weaker obfuscation.
  */
 
 /**
@@ -101,6 +136,7 @@ const DECODE_FN_IDENTIFIER = '__starve_obf_get';
 const KEY_IDENTIFIER = '__starve_obf_key';
 const TABLE_IDENTIFIER = '__starve_obf_table';
 const CACHE_IDENTIFIER = '__starve_obf_cache';
+const GLOBAL_OBJECT_IDENTIFIER = '_gbl';
 
 /**
  * Builds one file's self-contained XOR-encoded table + decode function as real ts.Statement
@@ -257,10 +293,286 @@ class NameRegistry {
   }
 }
 
+/**
+ * Decoy names are generated COMBINATORIALLY (prefix + suffix pairs), not picked from one
+ * flat list — a flat list runs out at a handful of entries, but this transform needs to
+ * support up to ~100 decoy fields/methods per class (see generateDecoyFields()'s own doc
+ * comment for the count range). `DECOY_FIELD_PREFIXES` (12) × `DECOY_FIELD_SUFFIXES` (12)
+ * gives 144 unique field-name combinations — comfortably above 100 — while every combination
+ * still reads as a plausible game-state field name (`_hpRegen`, `_shieldSync`,
+ * `_manaChecksum`, ...), styled the same as this codebase's own short lowerCamelCase naming.
+ * Method names use a disjoint word-pair scheme for the same reason (see
+ * DECOY_METHOD_VERBS/DECOY_METHOD_NOUNS below) — a method reads as a verb+noun action
+ * (`regenerateShield`, `syncChecksum`) where a field reads as a noun/state alone, so mixing
+ * the pools would produce an obviously-wrong shape like a field named `regenerate`.
+ */
+const DECOY_FIELD_PREFIXES = [
+  '_hp',
+  '_shield',
+  '_stamina',
+  '_mana',
+  '_cooldown',
+  '_armor',
+  '_seed',
+  '_epoch',
+  '_buff',
+  '_debug',
+  '_sync',
+  '_cache',
+];
+const DECOY_FIELD_SUFFIXES = [
+  'Regen',
+  'Sync',
+  'Checksum',
+  'Mask',
+  'Token',
+  'Rate',
+  'Flag',
+  'State',
+  'Delta',
+  'Cache',
+  'Tick',
+  'Ref',
+];
+
+/**
+ * Builds a shuffled, deduplicated list of up to `count` unique names from the prefix x
+ * suffix combinatorial space, excluding anything in `excludeNames` (case-sensitive, checked
+ * against the exact combined name) — shared by generateDecoyFields() and the method-name
+ * generation inside generateDecoyMembers() below, just parameterized by which two pools to
+ * combine.
+ * @param {() => number} random
+ * @param {number} count
+ * @param {Set<string>} excludeNames
+ * @param {string[]} prefixes
+ * @param {string[]} suffixes
+ * @returns {string[]}
+ */
+function generateUniqueNames(random, count, excludeNames, prefixes, suffixes) {
+  // Every prefix x suffix pair, e.g. "_hp" + "Regen" -> "_hpRegen" — built once per call
+  // rather than cached at module scope, since exclusion (own+inherited real member names)
+  // differs per class and filtering the combined list is cheap at this size (max 144
+  // entries for the field pools above).
+  const combined = [];
+  for (const prefix of prefixes) {
+    for (const suffix of suffixes) {
+      const name = prefix + suffix;
+      if (!excludeNames.has(name)) {
+        combined.push(name);
+      }
+    }
+  }
+
+  // Fisher-Yates shuffle using the injected RNG, then take the first `count` — this is what
+  // makes both the SELECTED subset and its ORDER differ per class/build, rather than always
+  // emitting the same names in the same prefix-major order.
+  for (let i = combined.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [combined[i], combined[j]] = [combined[j], combined[i]];
+  }
+
+  return combined.slice(0, count);
+}
+
+/**
+ * @param {() => number} random 0-inclusive/1-exclusive RNG, injected so callers can reuse
+ *   the same per-file `Math.random` convention already used elsewhere in this module (e.g.
+ *   buildEncodedTableStatements()'s per-file XOR key) rather than this function reaching for
+ *   `Math.random()` directly.
+ * @param {number} count how many decoy fields to generate for one class — the caller (see
+ *   createObfuscationTransformer's ClassDeclaration visit case) rolls this per class in a
+ *   ~60-100 range, not a fixed constant, so different classes in the same build carry
+ *   different amounts of noise.
+ * @param {Set<string>} excludeNames real member names already declared on this class (both
+ *   original and post-obfuscation-irrelevant — this check happens against the PLAINTEXT
+ *   name, before any $T(i) rewriting) — a decoy must never collide with a real field, or it
+ *   would silently shadow/overwrite it at class-definition time.
+ * @returns {{ name: string, value: import('typescript').Expression }[]} decoy name/value
+ *   pairs, using ts.factory-free plain data (the VALUE is still a factory Expression since a
+ *   literal needs the same factory instance the rest of the file's synthetic nodes use) —
+ *   the caller is responsible for turning `name` into a computed $T(i) key via its own
+ *   computedKeyFor(), same as every other rewritten name in this file.
+ */
+function generateDecoyFields(random, count, excludeNames) {
+  const factory = ts.factory;
+  const valueFactories = [
+    () => factory.createNumericLiteral(Math.floor(random() * 1000)),
+    () => (random() < 0.5 ? factory.createTrue() : factory.createFalse()),
+    () => factory.createNumericLiteral((random() * 100).toFixed(2)),
+    () => factory.createNull(),
+  ];
+
+  const names = generateUniqueNames(random, count, excludeNames, DECOY_FIELD_PREFIXES, DECOY_FIELD_SUFFIXES);
+  return names.map((name) => ({
+    name,
+    value: valueFactories[Math.floor(random() * valueFactories.length)](),
+  }));
+}
+
+/** Verb half of the decoy method name combinatorial space — see DECOY_FIELD_PREFIXES's own doc comment for why this is combinatorial rather than a flat list. */
+const DECOY_METHOD_VERBS = ['regenerate', 'sync', 'validate', 'apply', 'reset', 'tick', 'refresh', 'compute', 'normalize', 'roll', 'clamp', 'resolve'];
+/** Noun half — combined as verb+capitalized-noun, e.g. "regenerate" + "Shield" -> "regenerateShield". */
+const DECOY_METHOD_NOUNS = ['Shield', 'Buff', 'Checksum', 'Cache', 'Delta', 'Seed', 'State', 'Flags', 'Cooldown', 'Token', 'Mask', 'Epoch'];
+
+/**
+ * Generates BOTH decoy fields and decoy methods for one class in a single call (rather than
+ * two independent functions) specifically so a decoy method's body can safely reference a
+ * decoy FIELD generated in the same batch — reading `this[<decoy field>]` inside a decoy
+ * method makes the method look like a real accessor/utility instead of an obviously inert
+ * stub returning only literals, while guaranteeing the field reference always resolves to
+ * another fake, never-real field (never accidentally reading real game state).
+ *
+ * Decoy methods are pure and side-effect-free by construction: every body shape (see
+ * bodyShapes below — a plain return, an if/else, or a switch) only ever READS this same
+ * decoy batch's own fields and returns a value derived purely from them — never a loop,
+ * never a call to anything else (no other method, no global, no `_gbl`), never a write to
+ * anything, and never a reference to a REAL class member. Control flow (if/else, switch) IS
+ * included here specifically because that self-contained guarantee makes it safe: a branch
+ * condition built only from decoy state can never diverge based on anything a real caller
+ * does, so there's no path-dependent behavior for opaque/dead-branch injection to get wrong.
+ * This is a deliberately narrower scope than "add control flow to obfuscated code" — real
+ * method bodies (physics, rendering, networking) are NEVER touched this way; see the module
+ * doc comment's fake-control-flow discussion for why that boundary is load-bearing, not
+ * arbitrary.
+ *
+ * @param {() => number} random see generateDecoyFields()'s own doc comment.
+ * @param {number} fieldCount how many decoy fields to generate.
+ * @param {number} methodCount how many decoy methods to generate (0 is valid — fields only).
+ * @param {Set<string>} excludeNames real member names (own + inherited) already on this
+ *   class — checked against BOTH the field and method name pools, since a decoy method and a
+ *   real method colliding would silently override the real implementation, the same
+ *   correctness concern as a colliding decoy field.
+ * @param {(name: string) => import('typescript').Expression} computedKeyFor the SAME
+ *   per-file $T(i) key-building closure the caller already uses for every other rewritten
+ *   name in this file — required here so a decoy method's `this[<decoy field>]` read goes
+ *   through the identical computed-lookup obfuscation as everything else, rather than
+ *   leaking the decoy field's own name as a literal string at this one access site (which
+ *   would defeat the point: the field's DECLARATION is a computed name, but a plaintext
+ *   string read of it would still let a bundle-source grep find the name).
+ * @returns {{
+ *   fields: { name: string, value: import('typescript').Expression }[],
+ *   methods: { name: string, body: import('typescript').Statement[] }[],
+ * }}
+ */
+function generateDecoyMembers(random, fieldCount, methodCount, excludeNames, computedKeyFor) {
+  const fields = generateDecoyFields(random, fieldCount, excludeNames);
+  if (methodCount === 0 || fields.length === 0) {
+    return { fields, methods: [] };
+  }
+
+  const factory = ts.factory;
+  const fieldNamesUsed = new Set(fields.map((f) => f.name));
+  const methodExcludeNames = new Set([...excludeNames, ...fieldNamesUsed]);
+  const availableMethodNames = generateUniqueNames(
+    random,
+    methodCount,
+    methodExcludeNames,
+    DECOY_METHOD_VERBS,
+    DECOY_METHOD_NOUNS,
+  );
+
+  /** @type {(name: string) => import('typescript').Expression} */
+  const fieldReadFor = (name) => factory.createElementAccessExpression(factory.createThis(), computedKeyFor(name));
+
+  const exprBuilders = [
+    (/** @type {import('typescript').Expression} */ fieldRead) =>
+      factory.createBinaryExpression(
+        fieldRead,
+        ts.SyntaxKind.PlusToken,
+        factory.createNumericLiteral(Math.floor(random() * 10)),
+      ),
+    (/** @type {import('typescript').Expression} */ fieldRead) =>
+      factory.createPrefixUnaryExpression(ts.SyntaxKind.ExclamationToken, fieldRead),
+    (/** @type {import('typescript').Expression} */ fieldRead) =>
+      factory.createBinaryExpression(fieldRead, ts.SyntaxKind.AmpersandAmpersandToken, factory.createTrue()),
+  ];
+  const randomExpr = (/** @type {import('typescript').Expression} */ fieldRead) =>
+    exprBuilders[Math.floor(random() * exprBuilders.length)](fieldRead);
+
+  /**
+   * Body shape builders — every one of these ONLY ever reads fields already present in
+   * `fields` (this same decoy batch, via fieldReadFor()/computedKeyFor()) and returns a
+   * value derived purely from decoy state. None call another method (decoy or real), none
+   * reference `_gbl`/any global, none touch a real class member — this is what makes
+   * control flow here safe to add at all: a branch condition built only from decoy state
+   * can never diverge based on anything a real caller does, so there's no path-dependent
+   * behavior to get wrong the way it would be for a REAL method (see the module doc comment
+   * for why real-method control-flow injection was deliberately rejected). Each shape takes
+   * `pickedFields` — a small subset of `fields` reserved for this one method — and returns
+   * a Statement[] body.
+   *
+   * @type {((pickedFields: { name: string }[]) => import('typescript').Statement[])[]}
+   */
+  const bodyShapes = [
+    // return <expr>;
+    (pickedFields) => [factory.createReturnStatement(randomExpr(fieldReadFor(pickedFields[0].name)))],
+
+    // if (<cond>) { return <exprA>; } else { return <exprB>; }
+    (pickedFields) =>
+      [
+        factory.createIfStatement(
+          randomExpr(fieldReadFor(pickedFields[0].name)),
+          factory.createBlock(
+            [factory.createReturnStatement(randomExpr(fieldReadFor(pickedFields[1 % pickedFields.length].name)))],
+            true,
+          ),
+          factory.createBlock(
+            [factory.createReturnStatement(randomExpr(fieldReadFor(pickedFields[2 % pickedFields.length].name)))],
+            true,
+          ),
+        ),
+      ],
+
+    // switch (this[<decoy>] ? 1 : 0) { case 1: return <exprA>; default: return <exprB>; }
+    // The discriminant is coerced to a fixed 0/1 via the ternary specifically so the case
+    // labels can be plain numeric literals (a `switch` case label must be a literal, not an
+    // arbitrary expression) without this generator needing to know any decoy field's exact
+    // runtime value at codegen time — the field itself still drives which branch executes.
+    (pickedFields) => [
+      factory.createSwitchStatement(
+        factory.createConditionalExpression(
+          fieldReadFor(pickedFields[0].name),
+          undefined,
+          factory.createNumericLiteral(1),
+          undefined,
+          factory.createNumericLiteral(0),
+        ),
+        factory.createCaseBlock([
+          factory.createCaseClause(factory.createNumericLiteral(1), [
+            factory.createReturnStatement(randomExpr(fieldReadFor(pickedFields[1 % pickedFields.length].name))),
+          ]),
+          factory.createDefaultClause([
+            factory.createReturnStatement(randomExpr(fieldReadFor(pickedFields[2 % pickedFields.length].name))),
+          ]),
+        ]),
+      ),
+    ],
+  ];
+
+  const methods = availableMethodNames.map((name) => {
+    // Reserve up to 3 distinct decoy fields for this method's body (fewer if the batch is
+    // small — bodyShapes' own `% pickedFields.length` indexing degrades gracefully down to
+    // a single field being reused across branches when fields.length < 3).
+    const pickedFields = [];
+    const poolCopy = [...fields];
+    for (let i = 0; i < Math.min(3, poolCopy.length); i++) {
+      const index = Math.floor(random() * poolCopy.length);
+      pickedFields.push(poolCopy.splice(index, 1)[0]);
+    }
+    const shape = bodyShapes[Math.floor(random() * bodyShapes.length)];
+    return { name, body: shape(pickedFields) };
+  });
+
+  return { fields, methods };
+}
+
 module.exports = {
   createScopeChecker,
   createDomPropChecker,
   buildEncodedTableStatements,
+  generateDecoyFields,
+  generateDecoyMembers,
   NameRegistry,
   DECODE_FN_IDENTIFIER,
+  GLOBAL_OBJECT_IDENTIFIER,
 };
