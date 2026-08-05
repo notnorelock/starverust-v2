@@ -8,6 +8,7 @@
     "build": "webpack --config ../../configs/webpack/prod.config.js"
   },
   "dependencies": {
+    "@starve/assets": "workspace:*",
     "@starve/protocol": "workspace:*",
     "@starve/shared": "workspace:*",
     "@starve/ui": "workspace:*"

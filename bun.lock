@@ -58,11 +58,15 @@
     "packages/assets": {
       "name": "@starve/assets",
       "version": "0.1.0",
+      "devDependencies": {
+        "@types/webpack-env": "^1.18.8",
+      },
     },
     "packages/client": {
       "name": "@starve/client",
       "version": "0.1.0",
       "dependencies": {
+        "@starve/assets": "workspace:*",
         "@starve/protocol": "workspace:*",
         "@starve/shared": "workspace:*",
         "@starve/ui": "workspace:*",
@@ -505,6 +509,8 @@
     "@types/serve-static": ["@types/serve-static@1.15.10", "", { "dependencies": { "@types/http-errors": "*", "@types/node": "*", "@types/send": "<1" } }, "sha512-tRs1dB+g8Itk72rlSI2ZrW6vZg0YrLI81iQSTkMmOqnqCaNr/8Ek4VwWcN5vZgCYWbg/JJSGBlUaYGAOP73qBw=="],
 
     "@types/sockjs": ["@types/sockjs@0.3.36", "", { "dependencies": { "@types/node": "*" } }, "sha512-MK9V6NzAS1+Ud7JV9lJLFqW85VbC9dq3LmwZCuBe4wBDgKC0Kj/jd8Xl+nSviU+Qc3+m7umHHyHg//2KSa0a0Q=="],
+
+    "@types/webpack-env": ["@types/webpack-env@1.18.8", "", {}, "sha512-G9eAoJRMLjcvN4I08wB5I7YofOb/kaJNd5uoCMX+LbKXTPCF+ZIHuqTnFaK9Jz1rgs035f9JUPUhNFtqgucy/A=="],
 
     "@types/ws": ["@types/ws@8.18.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg=="],
 

@@ -1,9 +1,13 @@
 import { Opcode, PROTOCOL_VERSION, encodeHello, type RejectionReason } from '@starve/protocol';
 import { EntityType } from '@starve/shared';
+import { spritePartUrl } from '@starve/assets';
 import { createClientWorld } from '../world/ClientWorldFactory';
 import { registerPacketHandlers } from './PacketHandlerBindings';
-import { CanvasContext2DProvider } from '../../engine/render/CanvasContext2DProvider';
-import { Renderer } from '../../engine/render/Renderer';
+import { WebGLCanvasProvider } from '../../engine/render/WebGLCanvasProvider';
+import { SpriteRenderer } from '../../engine/render/SpriteRenderer';
+import { ColorQuadRenderer } from '../../engine/render/ColorQuadRenderer';
+import { TextTextureCache } from '../../engine/render/TextTextureCache';
+import { loadTexture } from '../../engine/render/TextureLoader';
 import { EntityRenderer } from '../../engine/render/renderers/EntityRenderer';
 import { Camera2D } from '../../engine/camera/Camera2D';
 import { NetworkClient } from '../../engine/network/NetworkClient';
@@ -11,10 +15,29 @@ import { packetHandlerRegistry } from '../../engine/network/PacketHandlerRegistr
 import { MouseInputSource } from '../../engine/input/MouseInputSource';
 import { DebugOverlay } from '../../engine/debug/DebugOverlay';
 import { RenderSystem } from '../render/systems/RenderSystem';
-import { PlayerRenderer } from '../render/renderers/PlayerRenderer';
+import { PlayerRenderer, type PlayerTextures, type PlayerVariant } from '../render/renderers/PlayerRenderer';
 import { GameClient } from '../core/GameClient';
 import { localPlayer } from '../core/LocalPlayerDataStore';
 import { CANVAS_PROVIDER, CAMERA_SERVICE, NETWORK_CLIENT } from '../core/ServiceKeys';
+
+/**
+ * No day/night cycle system exists yet (see CLAUDE.md's "documented insertion points, not
+ * placeholder no-op systems" convention) — the day variant is hardcoded here rather than
+ * computed from real game time; whatever later builds a day/night cycle swaps this
+ * constant for a computed PlayerVariant instead of adding branching before that system
+ * actually exists.
+ */
+const PLAYER_VARIANT: PlayerVariant = 'day';
+
+/** Loads all three player part textures for `variant`, resolving once every part has loaded. */
+async function loadPlayerTextures(gl: WebGL2RenderingContext, variant: PlayerVariant): Promise<PlayerTextures> {
+  const [head, leftArm, rightArm] = await Promise.all([
+    loadTexture(gl, spritePartUrl('player', variant, 'default_head')),
+    loadTexture(gl, spritePartUrl('player', variant, 'default_left_arm')),
+    loadTexture(gl, spritePartUrl('player', variant, 'default_right_arm')),
+  ]);
+  return { head, leftArm, rightArm };
+}
 
 function resolveWebSocketUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -58,14 +81,13 @@ export interface ClientBootstrap {
 export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
   const world = createClientWorld();
 
-  const canvasProvider = new CanvasContext2DProvider(mountPoint);
-  const renderer = new Renderer(canvasProvider);
+  const canvasProvider = new WebGLCanvasProvider(mountPoint);
   const camera = new Camera2D(window.innerWidth, window.innerHeight);
 
   world.services.register(CANVAS_PROVIDER, canvasProvider);
   world.services.register(CAMERA_SERVICE, camera);
 
-  // CanvasContext2DProvider resizes the canvas element itself on window resize (see its own
+  // WebGLCanvasProvider resizes the canvas element itself on window resize (see its own
   // constructor), but knows nothing about Camera2D — without this, worldToScreen()'s
   // viewport-centering math and follow()'s boundary clamp would keep using the stale
   // dimensions the camera was constructed with, drifting out of sync with the actual
@@ -73,11 +95,35 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
   // player.
   window.addEventListener('resize', () => camera.resize(window.innerWidth, window.innerHeight));
 
+  // Exactly one instance of each per canvas — shared by every EntityRenderer (see the
+  // renderers map below) AND by RenderSystem itself (see its own doc comment for why this
+  // must be the SAME instance in both places: two separate SpriteRenderers would compile
+  // two separate GL programs, and a renderer's draw() calls would then target whichever
+  // program RenderSystem's beginFrame() last bound — a different one from the renderer's
+  // own uniform locations, which is invalid).
+  const sprites = new SpriteRenderer(canvasProvider.gl);
+  const colorQuads = new ColorQuadRenderer(canvasProvider.gl);
+  const textCache = new TextTextureCache(canvasProvider.gl);
+
+  // Texture loading (see TextureLoader) is inherently async — the images have to actually
+  // download/decode before they exist as GPU data — so PlayerRenderer receives a getter
+  // closure rather than a PlayerTextures value it could read before loadPlayerTextures()'s
+  // promise resolves. It draws nothing for any part still missing (nickname/chat text
+  // still draw regardless) until each resolves, rather than bootstrapClient() blocking
+  // startup on every texture load finishing first — matching this file's own doc comment
+  // that GameClient.start() runs immediately, before any nickname/connection exists.
+  let playerTextures: PlayerTextures = { head: undefined, leftArm: undefined, rightArm: undefined };
+  void loadPlayerTextures(canvasProvider.gl, PLAYER_VARIANT).then((textures) => {
+    playerTextures = textures;
+  });
+
   // One EntityRenderer per EntityType RenderSystem might encounter — see EntityRenderer's
   // own doc comment for why this dispatch-by-type exists instead of one system doing every
   // entity's drawing inline. WorldGeometry has no renderer yet (nothing draws it today,
   // matching the pre-split behavior) — add one here when it needs a visual.
-  const renderers = new Map<EntityType, EntityRenderer>([[EntityType.Player, new PlayerRenderer(canvasProvider)]]);
+  const renderers = new Map<EntityType, EntityRenderer>([
+    [EntityType.Player, new PlayerRenderer(sprites, textCache, () => playerTextures)],
+  ]);
 
   // localPlayer().screenPosition is written by RenderSystem every frame (it's the one
   // place that already computes screen positions via Camera2D) — read lazily here via a
@@ -89,7 +135,7 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
   // RenderSystem also reads mouseInput directly (not just GameClient) so the local
   // player's own facing is drawn from the live mouse angle instead of the network-
   // interpolated one every remote player uses — see RenderSystem's own doc comment.
-  const renderSystem = new RenderSystem(canvasProvider, renderer, camera, renderers, mouseInput);
+  const renderSystem = new RenderSystem(canvasProvider, camera, renderers, mouseInput, sprites, colorQuads);
   world.registerSystem(renderSystem);
 
   // Plain callback list rather than a full pub/sub abstraction — onSessionChange has exactly

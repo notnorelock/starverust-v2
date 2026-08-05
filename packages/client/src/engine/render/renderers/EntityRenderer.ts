@@ -16,7 +16,7 @@ export interface EntityRenderContext {
  * later means writing one new EntityRenderer subclass and registering it, not editing
  * RenderSystem's draw loop. Subclasses are pure drawing code: no ECS/World access, no
  * network/state ownership — everything they need arrives via EntityRenderContext or the
- * constructor (e.g. PlayerRenderer's CanvasContext2DProvider).
+ * constructor (e.g. PlayerRenderer's SpriteRenderer/TextTextureCache).
  */
 export abstract class EntityRenderer {
   abstract draw(context: EntityRenderContext): void;

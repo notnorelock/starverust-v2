@@ -23,5 +23,5 @@
   // only included by the compiler's file list. Without this, ts-loader reports "Cannot find
   // module './WelcomeOverlay.module.css'" even though `bun run typecheck` (which does use
   // real project references) passes fine.
-  "include": ["src", "../ui/src"]
+  "include": ["src", "../ui/src", "../assets/src"]
 }

@@ -1,6 +1,7 @@
 import { System, PositionComponent, EntityType, type ComponentType, type World } from '@starve/shared';
-import type { CanvasContext2DProvider } from '../../../engine/render/CanvasContext2DProvider';
-import type { Renderer } from '../../../engine/render/Renderer';
+import type { WebGLCanvasProvider } from '../../../engine/render/WebGLCanvasProvider';
+import type { SpriteRenderer } from '../../../engine/render/SpriteRenderer';
+import type { ColorQuadRenderer } from '../../../engine/render/ColorQuadRenderer';
 import type { Camera2D } from '../../../engine/camera/Camera2D';
 import type { MouseInputSource } from '../../../engine/input/MouseInputSource';
 import { RenderableComponent } from '../../../engine/ecs/components/RenderableComponent';
@@ -10,6 +11,10 @@ import { entityTypeRegistry } from '../../network/EntityTypeRegistry';
 import { localPlayer } from '../../core/LocalPlayerDataStore';
 import { chatBubbleStore } from '../../network/ChatBubbleStore';
 import type { EntityRenderer } from '../../../engine/render/renderers/EntityRenderer';
+
+const DEBUG_LAG_LINE_COLOR: readonly [number, number, number, number] = [1, 0.23, 0.23, 1];
+const DEBUG_LAG_LINE_THICKNESS = 2;
+const DEBUG_LAG_LINE_DOT_SIZE = 6;
 
 /**
  * The client's only onUpdate-implementing system: runs every rAF frame (variable rate),
@@ -33,16 +38,32 @@ import type { EntityRenderer } from '../../../engine/render/renderers/EntityRend
  * ChatBubbleStore is advanced here too (chatBubbles.advance(dt)) for the same reason
  * SnapshotBuffer/Camera2D are — it's per-frame animation timing, and PlayerRenderer reads
  * its current state during the draw() pass immediately below.
+ *
+ * Rendering is WebGL-only (see WebGLCanvasProvider) — this system drives both the textured
+ * (SpriteRenderer) and flat-color (ColorQuadRenderer) draw pipelines, calling beginFrame()
+ * on each once per frame, since both share the same single canvas/viewport but are two
+ * independent shader programs (see ColorQuadRenderer's own doc comment for why they're
+ * separate programs rather than one branching shader). `sprites` is the SAME instance
+ * PlayerRenderer (and any other EntityRenderer) draws through — see ClientBootstrap, which
+ * constructs exactly one SpriteRenderer/ColorQuadRenderer per canvas and passes it to both
+ * this system and every renderer. A second SpriteRenderer instance would compile its own
+ * separate GL program; since ShaderProgram's uniform locations are only valid against the
+ * program they were queried from, a renderer holding one SpriteRenderer while this system's
+ * beginFrame() bound a *different* SpriteRenderer's program produces
+ * "uniform location is not from the associated program" WebGL errors — sharing the
+ * instance is what keeps every draw() call, wherever it's issued, targeting the one
+ * currently-bound program.
  */
 export class RenderSystem extends System {
   readonly query: ReadonlyArray<ComponentType> = [RenderableComponent];
 
   constructor(
-    private readonly canvasProvider: CanvasContext2DProvider,
-    private readonly renderer: Renderer,
+    private readonly canvasProvider: WebGLCanvasProvider,
     private readonly camera: Camera2D,
     private readonly renderers: ReadonlyMap<EntityType, EntityRenderer>,
     private readonly mouseInput: MouseInputSource,
+    private readonly sprites: SpriteRenderer,
+    private readonly colorQuads: ColorQuadRenderer,
   ) {
     super();
   }
@@ -91,10 +112,8 @@ export class RenderSystem extends System {
   }
 
   private draw(world: World): void {
-    const { context } = this.canvasProvider;
-    this.renderer.clear();
-
-    context.save();
+    const { width, height } = this.canvasProvider.canvas;
+    this.sprites.beginFrame(width, height);
 
     for (const entityId of world.entities.query(RenderableComponent)) {
       const renderable = world.entities.getComponent(entityId, RenderableComponent);
@@ -117,11 +136,19 @@ export class RenderSystem extends System {
 
       const entityRenderer = this.rendererFor(entityId);
       entityRenderer?.draw({ entityId, screen, angle, isLocalPlayer: renderable.isLocalPlayer });
-
-      this.drawDebugLagLine(entityId, screen);
     }
 
-    context.restore();
+    // Debug lag lines draw in a second pass (a separate shader program/beginFrame — see
+    // ColorQuadRenderer's own doc comment) after every entity's sprite/text, so they
+    // overlay on top rather than being interleaved with — and potentially hidden behind —
+    // per-entity draws above.
+    this.colorQuads.beginFrame(width, height);
+    for (const entityId of world.entities.query(RenderableComponent)) {
+      const interpolation = world.entities.getComponent(entityId, InterpolationComponent);
+      if (interpolation) {
+        this.drawDebugLagLine(entityId, this.camera.worldToScreen(interpolation.x, interpolation.y));
+      }
+    }
   }
 
   private rendererFor(entityId: number): EntityRenderer | undefined {
@@ -142,19 +169,15 @@ export class RenderSystem extends System {
       return;
     }
 
-    const { context } = this.canvasProvider;
     const rawScreen = this.camera.worldToScreen(raw.x, raw.y);
 
-    context.beginPath();
-    context.strokeStyle = '#ff3b3b';
-    context.lineWidth = 2;
-    context.moveTo(rawScreen.x, rawScreen.y);
-    context.lineTo(renderScreen.x, renderScreen.y);
-    context.stroke();
-
-    context.beginPath();
-    context.fillStyle = '#ff3b3b';
-    context.arc(rawScreen.x, rawScreen.y, 3, 0, Math.PI * 2);
-    context.fill();
+    this.colorQuads.drawLine(rawScreen.x, rawScreen.y, renderScreen.x, renderScreen.y, DEBUG_LAG_LINE_THICKNESS, DEBUG_LAG_LINE_COLOR);
+    this.colorQuads.draw({
+      x: rawScreen.x - DEBUG_LAG_LINE_DOT_SIZE / 2,
+      y: rawScreen.y - DEBUG_LAG_LINE_DOT_SIZE / 2,
+      width: DEBUG_LAG_LINE_DOT_SIZE,
+      height: DEBUG_LAG_LINE_DOT_SIZE,
+      color: DEBUG_LAG_LINE_COLOR,
+    });
   }
 }

@@ -6,5 +6,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["src"],
-  "references": [{ "path": "../shared" }, { "path": "../protocol" }, { "path": "../ui" }]
+  "references": [{ "path": "../shared" }, { "path": "../protocol" }, { "path": "../ui" }, { "path": "../assets" }]
 }
