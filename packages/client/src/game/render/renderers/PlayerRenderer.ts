@@ -1,5 +1,5 @@
-import { EntityRenderer, type EntityRenderContext } from './EntityRenderer';
-import type { CanvasContext2DProvider } from '../CanvasContext2DProvider';
+import { EntityRenderer, type EntityRenderContext } from '../../../engine/render/renderers/EntityRenderer';
+import type { CanvasContext2DProvider } from '../../../engine/render/CanvasContext2DProvider';
 import { nicknameRegistry } from '../../network/NicknameRegistry';
 import { chatBubbleOpacity, chatBubbleStore } from '../../network/ChatBubbleStore';
 

@@ -2,7 +2,7 @@ import './styles/global.scss';
 import { createSignal } from 'solid-js';
 import { RejectionReason } from '@starve/protocol';
 import { mountWelcomeOverlay, mountChatBox } from '@starve/ui';
-import { bootstrapClient } from './bootstrap/ClientBootstrap';
+import { bootstrapClient } from './game/bootstrap/ClientBootstrap';
 
 function requireElement(id: string): HTMLElement {
   const element = document.getElementById(id);

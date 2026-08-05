@@ -1,15 +1,15 @@
 import { System, PositionComponent, EntityType, type ComponentType, type World } from '@starve/shared';
-import type { CanvasContext2DProvider } from '../CanvasContext2DProvider';
-import type { Renderer } from '../Renderer';
-import type { Camera2D } from '../../camera/Camera2D';
+import type { CanvasContext2DProvider } from '../../../engine/render/CanvasContext2DProvider';
+import type { Renderer } from '../../../engine/render/Renderer';
+import type { Camera2D } from '../../../engine/camera/Camera2D';
+import type { MouseInputSource } from '../../../engine/input/MouseInputSource';
+import { RenderableComponent } from '../../../engine/ecs/components/RenderableComponent';
+import { InterpolationComponent } from '../../../engine/ecs/components/InterpolationComponent';
 import { snapshotBuffer } from '../../network/SnapshotBuffer';
 import { entityTypeRegistry } from '../../network/EntityTypeRegistry';
 import { localPlayer } from '../../core/LocalPlayerDataStore';
-import { mouseInput } from '../../input/MouseInputSource';
 import { chatBubbleStore } from '../../network/ChatBubbleStore';
-import type { EntityRenderer } from '../renderers/EntityRenderer';
-import { RenderableComponent } from '../../ecs/components/RenderableComponent';
-import { InterpolationComponent } from '../../ecs/components/InterpolationComponent';
+import type { EntityRenderer } from '../../../engine/render/renderers/EntityRenderer';
 
 /**
  * The client's only onUpdate-implementing system: runs every rAF frame (variable rate),
@@ -42,6 +42,7 @@ export class RenderSystem extends System {
     private readonly renderer: Renderer,
     private readonly camera: Camera2D,
     private readonly renderers: ReadonlyMap<EntityType, EntityRenderer>,
+    private readonly mouseInput: MouseInputSource,
   ) {
     super();
   }
@@ -111,7 +112,7 @@ export class RenderSystem extends System {
         // screenPosition must be current before sampling the angle — MouseInputSource
         // computes it from this exact value (see that class's own doc comment).
         localPlayer().screenPosition = screen;
-        angle = mouseInput().sample();
+        angle = this.mouseInput.sample();
       }
 
       const entityRenderer = this.rendererFor(entityId);

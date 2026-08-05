@@ -1,14 +1,14 @@
 import { Logger, type World } from '@starve/shared';
 import { encodePlayerInput, encodePlayerAngle, encodePing, encodeChatMessage } from '@starve/protocol';
-import type { NetworkClient } from '../network/NetworkClient';
-import { keyboardInputSource } from '../input/KeyboardInputSource';
-import { mouseInput } from '../input/MouseInputSource';
-import type { DebugOverlay } from '../debug/DebugOverlay';
+import type { NetworkClient } from '../../engine/network/NetworkClient';
+import { keyboardInputSource } from '../../engine/input/KeyboardInputSource';
+import type { MouseInputSource } from '../../engine/input/MouseInputSource';
+import type { DebugOverlay } from '../../engine/debug/DebugOverlay';
+import { ClientClock } from '../../engine/core/ClientClock';
+import { FrameStatsTracker } from '../../engine/core/FrameStatsTracker';
 import { snapshotBuffer } from '../network/SnapshotBuffer';
 import { chatBubbleStore } from '../network/ChatBubbleStore';
 import { localPlayer } from './LocalPlayerDataStore';
-import { ClientClock } from './ClientClock';
-import { FrameStatsTracker } from './FrameStatsTracker';
 
 const logger = new Logger('GameClient');
 
@@ -53,6 +53,7 @@ export class GameClient {
   constructor(
     private readonly world: World,
     private readonly networkClient: NetworkClient,
+    private readonly mouseInput: MouseInputSource,
     private readonly debugOverlay: DebugOverlay,
   ) {
     this.stats = new FrameStatsTracker(this.networkClient);
@@ -62,10 +63,10 @@ export class GameClient {
   start(): void {
     this.world.init();
     keyboardInputSource().attach();
-    mouseInput().attach();
+    this.mouseInput.attach();
 
     this.unsubscribeDirection = keyboardInputSource().onChange((direction) => this.sendDirection(direction));
-    this.unsubscribeAngle = mouseInput().onChange((angle) => this.sendAngle(angle));
+    this.unsubscribeAngle = this.mouseInput.onChange((angle) => this.sendAngle(angle));
 
     this.stats.reset(performance.now());
     this.animationFrameHandle = requestAnimationFrame((t) => this.frame(t));
@@ -170,7 +171,7 @@ export class GameClient {
   private frame(now: number): void {
     const dt = this.clock.tick(now);
     this.world.update(dt);
-    mouseInput().poll(dt);
+    this.mouseInput.poll(dt);
     this.stats.recordFrame(now);
 
     // dt=0: this is a read-only re-sample for the debug overlay after RenderSystem (part

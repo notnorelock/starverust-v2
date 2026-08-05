@@ -1,11 +1,11 @@
 import { Opcode } from '@starve/protocol';
 import { EntityType, type World } from '@starve/shared';
-import type { Camera2D } from '../camera/Camera2D';
+import type { Camera2D } from '../../engine/camera/Camera2D';
+import { packetHandlerRegistry } from '../../engine/network/PacketHandlerRegistry';
 import { snapshotBuffer } from '../network/SnapshotBuffer';
 import { entityTypeRegistry } from '../network/EntityTypeRegistry';
 import { nicknameRegistry } from '../network/NicknameRegistry';
 import { chatBubbleStore } from '../network/ChatBubbleStore';
-import { packetHandlerRegistry } from '../network/PacketHandlerRegistry';
 import type { GameClient } from '../core/GameClient';
 import { localPlayer } from '../core/LocalPlayerDataStore';
 

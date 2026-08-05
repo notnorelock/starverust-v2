@@ -2,16 +2,18 @@ import { Opcode, PROTOCOL_VERSION, encodeHello, type RejectionReason } from '@st
 import { EntityType } from '@starve/shared';
 import { createClientWorld } from '../world/ClientWorldFactory';
 import { registerPacketHandlers } from './PacketHandlerBindings';
-import { CanvasContext2DProvider } from '../render/CanvasContext2DProvider';
-import { Renderer } from '../render/Renderer';
+import { CanvasContext2DProvider } from '../../engine/render/CanvasContext2DProvider';
+import { Renderer } from '../../engine/render/Renderer';
+import { EntityRenderer } from '../../engine/render/renderers/EntityRenderer';
+import { Camera2D } from '../../engine/camera/Camera2D';
+import { NetworkClient } from '../../engine/network/NetworkClient';
+import { packetHandlerRegistry } from '../../engine/network/PacketHandlerRegistry';
+import { MouseInputSource } from '../../engine/input/MouseInputSource';
+import { DebugOverlay } from '../../engine/debug/DebugOverlay';
 import { RenderSystem } from '../render/systems/RenderSystem';
-import { EntityRenderer } from '../render/renderers/EntityRenderer';
 import { PlayerRenderer } from '../render/renderers/PlayerRenderer';
-import { Camera2D } from '../camera/Camera2D';
-import { NetworkClient } from '../network/NetworkClient';
-import { packetHandlerRegistry } from '../network/PacketHandlerRegistry';
-import { DebugOverlay } from '../debug/DebugOverlay';
 import { GameClient } from '../core/GameClient';
+import { localPlayer } from '../core/LocalPlayerDataStore';
 import { CANVAS_PROVIDER, CAMERA_SERVICE, NETWORK_CLIENT } from '../core/ServiceKeys';
 
 function resolveWebSocketUrl(): string {
@@ -77,10 +79,17 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
   // matching the pre-split behavior) — add one here when it needs a visual.
   const renderers = new Map<EntityType, EntityRenderer>([[EntityType.Player, new PlayerRenderer(canvasProvider)]]);
 
-  // RenderSystem also reads mouseInput() directly (not just GameClient) so the local
+  // localPlayer().screenPosition is written by RenderSystem every frame (it's the one
+  // place that already computes screen positions via Camera2D) — read lazily here via a
+  // closure rather than injecting Camera2D position math directly into this input source,
+  // keeping MouseInputSource (src/engine) ignorant of rendering and of game-specific state
+  // (LocalPlayerDataStore lives in src/game) entirely.
+  const mouseInput = new MouseInputSource(() => localPlayer().screenPosition);
+
+  // RenderSystem also reads mouseInput directly (not just GameClient) so the local
   // player's own facing is drawn from the live mouse angle instead of the network-
   // interpolated one every remote player uses — see RenderSystem's own doc comment.
-  const renderSystem = new RenderSystem(canvasProvider, renderer, camera, renderers);
+  const renderSystem = new RenderSystem(canvasProvider, renderer, camera, renderers, mouseInput);
   world.registerSystem(renderSystem);
 
   // Plain callback list rather than a full pub/sub abstraction — onSessionChange has exactly
@@ -103,7 +112,7 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
 
   const debugOverlay = new DebugOverlay(mountPoint);
 
-  const gameClient = new GameClient(world, networkClient, debugOverlay);
+  const gameClient = new GameClient(world, networkClient, mouseInput, debugOverlay);
   gameClient.start();
 
   registerPacketHandlers({ world, camera, gameClient, notifySessionChange });

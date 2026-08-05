@@ -1,7 +1,7 @@
 import { createServiceKey, type ServiceKey } from '@starve/shared';
-import type { CanvasContext2DProvider } from '../render/CanvasContext2DProvider';
-import type { Camera2D } from '../camera/Camera2D';
-import type { NetworkClient } from '../network/NetworkClient';
+import type { CanvasContext2DProvider } from '../../engine/render/CanvasContext2DProvider';
+import type { Camera2D } from '../../engine/camera/Camera2D';
+import type { NetworkClient } from '../../engine/network/NetworkClient';
 
 export const CANVAS_PROVIDER: ServiceKey<CanvasContext2DProvider> =
   createServiceKey<CanvasContext2DProvider>('CanvasContext2DProvider');

@@ -1,5 +1,4 @@
 import { InputSource } from './InputSource';
-import { localPlayer } from '../core/LocalPlayerDataStore';
 
 /**
  * How often (seconds) this source re-samples and possibly emits — ported from the
@@ -70,7 +69,10 @@ const BUTTON_TO_FLAG: Record<number, MouseButtonFlag> = {
  * on screen right now" answer, which isn't a fixed browser-event payload —
  * `localPlayerScreenPosition` is injected as a callback (rather than, say, a direct
  * Camera2D+LocalPlayerDataStore dependency) so this class stays testable without
- * constructing a full render stack.
+ * constructing a full render stack, and so it has zero dependency on game-specific state —
+ * this class lives in src/engine, and LocalPlayerDataStore lives in src/game (see that
+ * class's own doc comment); constructing this with the callback is the game layer's job
+ * (see GameClient/ClientBootstrap), not this class's.
  *
  * Also tracks held mouse-button state (left/right — see MouseButtonFlag), extending
  * `InputSource<number>`'s angle-diffing machinery to a second, independent value on the
@@ -182,13 +184,3 @@ export class MouseInputSource extends InputSource<number> {
     }
   }
 }
-
-/**
- * Module-level singleton — one per page, reached for directly instead of threaded through
- * constructors/DI (see the other input/network singletons for the same pattern, e.g.
- * localPlayer()). Unlike those, this class's constructor isn't no-arg — it needs
- * `localPlayer().screenPosition` as its localPlayerScreenPosition callback, so that's
- * wired here rather than left to the call site.
- */
-const instance = new MouseInputSource(() => localPlayer().screenPosition);
-export const mouseInput = (): MouseInputSource => instance;
