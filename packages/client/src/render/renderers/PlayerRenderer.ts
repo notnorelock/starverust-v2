@@ -1,7 +1,7 @@
 import { EntityRenderer, type EntityRenderContext } from './EntityRenderer';
 import type { CanvasContext2DProvider } from '../CanvasContext2DProvider';
-import type { NicknameRegistry } from '../../network/NicknameRegistry';
-import { chatBubbleOpacity, type ChatBubbleStore } from '../../network/ChatBubbleStore';
+import { nicknameRegistry } from '../../network/NicknameRegistry';
+import { chatBubbleOpacity, chatBubbleStore } from '../../network/ChatBubbleStore';
 
 const PLAYER_RADIUS = 16;
 const LOCAL_PLAYER_COLOR = '#7cffb2';
@@ -30,11 +30,7 @@ const CHAT_BUBBLE_BASE_OFFSET_Y = PLAYER_RADIUS + 60;
  * covers where this project's behavior deliberately diverges from it).
  */
 export class PlayerRenderer extends EntityRenderer {
-  constructor(
-    private readonly canvasProvider: CanvasContext2DProvider,
-    private readonly nicknames: NicknameRegistry,
-    private readonly chatBubbles: ChatBubbleStore,
-  ) {
+  constructor(private readonly canvasProvider: CanvasContext2DProvider) {
     super();
   }
 
@@ -54,7 +50,7 @@ export class PlayerRenderer extends EntityRenderer {
     ctx.lineTo(screen.x + Math.cos(angle) * AIM_LINE_LENGTH, screen.y + Math.sin(angle) * AIM_LINE_LENGTH);
     ctx.stroke();
 
-    const nickname = this.nicknames.get(context.entityId);
+    const nickname = nicknameRegistry().get(context.entityId);
     if (nickname) {
       ctx.font = '13px sans-serif';
       ctx.textAlign = 'center';
@@ -76,7 +72,7 @@ export class PlayerRenderer extends EntityRenderer {
    * micro-optimization.
    */
   private drawChatBubbles(context: EntityRenderContext): void {
-    const bubbles = this.chatBubbles.bubblesFor(context.entityId);
+    const bubbles = chatBubbleStore().bubblesFor(context.entityId);
     if (bubbles.length === 0) {
       return;
     }

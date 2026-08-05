@@ -41,3 +41,7 @@ export class NicknameRegistry {
     return this.entityIdByPid.get(pid);
   }
 }
+
+/** Module-level singleton — one per page, reached for directly instead of threaded through constructors/DI. */
+const instance = new NicknameRegistry();
+export const nicknameRegistry = (): NicknameRegistry => instance;

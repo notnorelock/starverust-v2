@@ -35,7 +35,7 @@ export class ClientConnection {
    * Latest received PlayerAnglePacket — buffered the same way latestInput is (persists
    * across ticks rather than being cleared after one read) and for the same reason: the
    * client only sends a new one when the mouse-driven angle actually changes by more than
-   * MouseAngleInputSource's epsilon, not on a fixed timer, so InputApplicationSystem must
+   * MouseInputSource's epsilon, not on a fixed timer, so InputApplicationSystem must
    * keep re-applying the last-known angle every tick between updates.
    */
   private latestAngle: PlayerAnglePacket | undefined;

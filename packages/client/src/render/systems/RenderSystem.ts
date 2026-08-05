@@ -2,11 +2,11 @@ import { System, PositionComponent, EntityType, type ComponentType, type World }
 import type { CanvasContext2DProvider } from '../CanvasContext2DProvider';
 import type { Renderer } from '../Renderer';
 import type { Camera2D } from '../../camera/Camera2D';
-import type { SnapshotBuffer } from '../../network/SnapshotBuffer';
-import type { EntityTypeRegistry } from '../../network/EntityTypeRegistry';
-import type { LocalPlayerDataStore } from '../../core/LocalPlayerDataStore';
-import type { MouseAngleInputSource } from '../../input/MouseAngleInputSource';
-import type { ChatBubbleStore } from '../../network/ChatBubbleStore';
+import { snapshotBuffer } from '../../network/SnapshotBuffer';
+import { entityTypeRegistry } from '../../network/EntityTypeRegistry';
+import { localPlayer } from '../../core/LocalPlayerDataStore';
+import { mouseInput } from '../../input/MouseInputSource';
+import { chatBubbleStore } from '../../network/ChatBubbleStore';
 import type { EntityRenderer } from '../renderers/EntityRenderer';
 import { RenderableComponent } from '../../ecs/components/RenderableComponent';
 import { InterpolationComponent } from '../../ecs/components/InterpolationComponent';
@@ -21,7 +21,7 @@ import { InterpolationComponent } from '../../ecs/components/InterpolationCompon
  * bookkeeping, not entity-specific drawing code, which lives in the renderer classes
  * themselves (see PlayerRenderer).
  *
- * The local player's own facing angle is drawn from MouseAngleInputSource.sample() rather
+ * The local player's own facing angle is drawn from MouseInputSource.sample() rather
  * than SnapshotBuffer's network-interpolated angle (see draw() below) — remote players
  * only ever have a broadcast angle to work with, which is why SnapshotBuffer's
  * chase-and-turn interpolation exists at all (see that class's own doc comment), but the
@@ -41,29 +41,24 @@ export class RenderSystem extends System {
     private readonly canvasProvider: CanvasContext2DProvider,
     private readonly renderer: Renderer,
     private readonly camera: Camera2D,
-    private readonly snapshotBuffer: SnapshotBuffer,
-    private readonly entityTypes: EntityTypeRegistry,
-    private readonly localPlayer: LocalPlayerDataStore,
     private readonly renderers: ReadonlyMap<EntityType, EntityRenderer>,
-    private readonly mouseAngleInput: MouseAngleInputSource,
-    private readonly chatBubbles: ChatBubbleStore,
   ) {
     super();
   }
 
   override onUpdate(dt: number, world: World): void {
-    const sampled = this.snapshotBuffer.sample(dt);
+    const sampled = snapshotBuffer().sample(dt);
 
     for (const sample of sampled) {
       this.ensureInterpolatedEntity(world, sample.entityId, sample.x, sample.y, sample.angle);
     }
 
-    const localPosition = sampled.find((s) => s.entityId === this.localPlayer.entityId);
+    const localPosition = sampled.find((s) => s.entityId === localPlayer().entityId);
     if (localPosition) {
       this.camera.follow(localPosition.x, localPosition.y);
     }
     this.camera.update(dt);
-    this.chatBubbles.advance(dt);
+    chatBubbleStore().advance(dt);
 
     this.draw(world);
   }
@@ -89,7 +84,7 @@ export class RenderSystem extends System {
     interpolation.angle = angle;
 
     if (!world.entities.hasComponent(entityId, RenderableComponent)) {
-      const isLocalPlayer = entityId === this.localPlayer.entityId;
+      const isLocalPlayer = entityId === localPlayer().entityId;
       world.entities.addComponent(entityId, RenderableComponent, new RenderableComponent(entityId, { isLocalPlayer }));
     }
   }
@@ -113,10 +108,10 @@ export class RenderSystem extends System {
 
       let angle = interpolation instanceof InterpolationComponent ? interpolation.angle : 0;
       if (renderable.isLocalPlayer) {
-        // screenPosition must be current before sampling the angle — MouseAngleInputSource
+        // screenPosition must be current before sampling the angle — MouseInputSource
         // computes it from this exact value (see that class's own doc comment).
-        this.localPlayer.screenPosition = screen;
-        angle = this.mouseAngleInput.sample();
+        localPlayer().screenPosition = screen;
+        angle = mouseInput().sample();
       }
 
       const entityRenderer = this.rendererFor(entityId);
@@ -129,7 +124,7 @@ export class RenderSystem extends System {
   }
 
   private rendererFor(entityId: number): EntityRenderer | undefined {
-    return this.renderers.get(this.entityTypes.get(entityId));
+    return this.renderers.get(entityTypeRegistry().get(entityId));
   }
 
   /**
@@ -141,7 +136,7 @@ export class RenderSystem extends System {
    * Remove once movement smoothing is confirmed to look right.
    */
   private drawDebugLagLine(entityId: number, renderScreen: { x: number; y: number }): void {
-    const raw = this.snapshotBuffer.latestRawPosition(entityId);
+    const raw = snapshotBuffer().latestRawPosition(entityId);
     if (!raw) {
       return;
     }

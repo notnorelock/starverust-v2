@@ -6,7 +6,7 @@ import { Opcode } from '../opcodes';
 /**
  * Client -> Server: the player's current aim/facing angle in radians (standard math
  * convention: 0 = +x, increasing counter-clockwise — see AimComponent, shared), sent on
- * its own mouse-driven schedule via MouseAngleInputSource, independent of
+ * its own mouse-driven schedule via MouseInputSource, independent of
  * PlayerInputPacket's movement-key-driven direction bitmask. Split into its own packet
  * (rather than a field on PlayerInputPacket) because the two change on genuinely
  * different, uncorrelated schedules — a player can move without moving the mouse, or aim

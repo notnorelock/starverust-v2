@@ -173,6 +173,10 @@ export class SnapshotBuffer {
   }
 }
 
+/** Module-level singleton — one per page, reached for directly instead of threaded through constructors/DI. */
+const instance = new SnapshotBuffer();
+export const snapshotBuffer = (): SnapshotBuffer => instance;
+
 function chaseTowards(render: RenderedEntity, step: number): void {
   if (render.x === render.r.x && render.y === render.r.y) {
     return;

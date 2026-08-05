@@ -86,3 +86,7 @@ export class KeyboardInputSource extends InputSource<number> {
     return previous !== next;
   }
 }
+
+/** Module-level singleton — one per page, reached for directly instead of threaded through constructors/DI. */
+const instance = new KeyboardInputSource();
+export const keyboardInputSource = (): KeyboardInputSource => instance;

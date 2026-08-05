@@ -1,21 +1,19 @@
 import { Logger, type World } from '@starve/shared';
 import { encodePlayerInput, encodePlayerAngle, encodePing, encodeChatMessage } from '@starve/protocol';
 import type { NetworkClient } from '../network/NetworkClient';
-import type { KeyboardInputSource } from '../input/KeyboardInputSource';
-import type { MouseAngleInputSource } from '../input/MouseAngleInputSource';
+import { keyboardInputSource } from '../input/KeyboardInputSource';
+import { mouseInput } from '../input/MouseInputSource';
 import type { DebugOverlay } from '../debug/DebugOverlay';
-import type { SnapshotBuffer } from '../network/SnapshotBuffer';
-import type { ChatBubbleStore } from '../network/ChatBubbleStore';
-import type { LocalPlayerDataStore } from './LocalPlayerDataStore';
+import { snapshotBuffer } from '../network/SnapshotBuffer';
+import { chatBubbleStore } from '../network/ChatBubbleStore';
+import { localPlayer } from './LocalPlayerDataStore';
 import { ClientClock } from './ClientClock';
+import { FrameStatsTracker } from './FrameStatsTracker';
 
 const logger = new Logger('GameClient');
 
 /** How often a PingPacket is sent to measure round-trip latency — see sendPing()/onPong(). */
 const PING_INTERVAL_MS = 5000;
-
-/** How often the debug overlay's packets-in/packets-out counters are refreshed — see trackPacketRates(). */
-const PACKET_RATE_WINDOW_MS = 1000;
 
 /**
  * Composition root for the browser client: owns the render loop (requestAnimationFrame,
@@ -35,56 +33,41 @@ const PACKET_RATE_WINDOW_MS = 1000;
  * PlayerInputPacket (movement-key direction, via KeyboardInputSource) is purely
  * event-driven — it goes out only when the held-key bitmask changes, since there's nothing
  * new to tell the server between key transitions. PlayerAnglePacket (mouse-driven aim
- * angle) is different: MouseAngleInputSource.poll(dt), called once per frame below,
- * throttles both how often it re-samples and how often it can emit to a fixed ~200ms
- * cadence (see that class's own doc comment for why). The two are sent as entirely
- * separate packets on entirely independent schedules (see PlayerAnglePacket's own doc
- * comment for why they're split rather than one combined packet).
+ * angle) is different: MouseInputSource.poll(dt), called once per frame below, throttles
+ * both how often it re-samples and how often it can emit to a fixed ~200ms cadence (see
+ * that class's own doc comment for why). The two are sent as entirely separate packets on
+ * entirely independent schedules (see PlayerAnglePacket's own doc comment for why they're
+ * split rather than one combined packet).
  */
 export class GameClient {
   private readonly clock = new ClientClock();
+  private readonly stats: FrameStatsTracker;
   private inputSequence = 0;
   private lastServerTick = 0;
-  private fps = 0;
-  private fpsAccumulator = 0;
-  private fpsWindowStart = 0;
   private animationFrameHandle: number | undefined;
   private unsubscribeDirection: (() => void) | undefined;
   private unsubscribeAngle: (() => void) | undefined;
   private pingIntervalHandle: ReturnType<typeof setInterval> | undefined;
   private pingMs: number | undefined;
-  private packetsInPerSecond = 0;
-  private packetsOutPerSecond = 0;
-  private bytesInPerSecond = 0;
-  private bytesOutPerSecond = 0;
-  private packetRateWindowStart = 0;
-  private packetsInAtWindowStart = 0;
-  private packetsOutAtWindowStart = 0;
-  private bytesInAtWindowStart = 0;
-  private bytesOutAtWindowStart = 0;
 
   constructor(
     private readonly world: World,
     private readonly networkClient: NetworkClient,
-    private readonly keyboardInput: KeyboardInputSource,
-    private readonly mouseAngleInput: MouseAngleInputSource,
-    private readonly snapshotBuffer: SnapshotBuffer,
     private readonly debugOverlay: DebugOverlay,
-    private readonly localPlayer: LocalPlayerDataStore,
-    private readonly chatBubbles: ChatBubbleStore,
-  ) {}
+  ) {
+    this.stats = new FrameStatsTracker(this.networkClient);
+  }
 
   /** Starts local simulation/rendering/input only — no network. Safe to call before a nickname exists. */
   start(): void {
     this.world.init();
-    this.keyboardInput.attach();
-    this.mouseAngleInput.attach();
+    keyboardInputSource().attach();
+    mouseInput().attach();
 
-    this.unsubscribeDirection = this.keyboardInput.onChange((direction) => this.sendDirection(direction));
-    this.unsubscribeAngle = this.mouseAngleInput.onChange((angle) => this.sendAngle(angle));
+    this.unsubscribeDirection = keyboardInputSource().onChange((direction) => this.sendDirection(direction));
+    this.unsubscribeAngle = mouseInput().onChange((angle) => this.sendAngle(angle));
 
-    this.fpsWindowStart = performance.now();
-    this.packetRateWindowStart = performance.now();
+    this.stats.reset(performance.now());
     this.animationFrameHandle = requestAnimationFrame((t) => this.frame(t));
 
     // sendPing() itself no-ops while disconnected (same guard as sendDirection/sendAngle),
@@ -126,7 +109,7 @@ export class GameClient {
    * happen to release the key mid-conversation.
    */
   setChatOpen(open: boolean): void {
-    this.keyboardInput.setEnabled(!open);
+    keyboardInputSource().setEnabled(!open);
   }
 
   /**
@@ -143,8 +126,9 @@ export class GameClient {
       return;
     }
     this.networkClient.send(encodeChatMessage({ text }));
-    if (this.localPlayer.entityId !== undefined) {
-      this.chatBubbles.push(this.localPlayer.entityId, text);
+    const entityId = localPlayer().entityId;
+    if (entityId !== undefined) {
+      chatBubbleStore().push(entityId, text);
     }
   }
 
@@ -186,18 +170,17 @@ export class GameClient {
   private frame(now: number): void {
     const dt = this.clock.tick(now);
     this.world.update(dt);
-    this.mouseAngleInput.poll(dt);
-    this.trackFps(now);
-    this.trackPacketRates(now);
+    mouseInput().poll(dt);
+    this.stats.recordFrame(now);
 
     // dt=0: this is a read-only re-sample for the debug overlay after RenderSystem (part
     // of world.update() above) already advanced the real chase-and-snap for this frame —
     // see SnapshotBuffer.sample()'s own doc comment; a zero step is a no-op on top of that.
-    const sampled = this.snapshotBuffer.sample(0);
-    const localPlayerPosition = sampled.find((s) => s.entityId === this.localPlayer.entityId);
+    const sampled = snapshotBuffer().sample(0);
+    const localPlayerPosition = sampled.find((s) => s.entityId === localPlayer().entityId);
 
     this.debugOverlay.update({
-      fps: this.fps,
+      ...this.stats.stats(),
       serverTick: this.lastServerTick,
       pingMs: this.pingMs,
       entityCount: sampled.length,
@@ -206,51 +189,8 @@ export class GameClient {
       // of eyeballing the canvas. Undefined until Handshake assigns localPlayer.entityId
       // and at least one snapshot has arrived for it.
       playerPosition: localPlayerPosition ? { x: localPlayerPosition.x, y: localPlayerPosition.y } : undefined,
-      packetsInPerSecond: this.packetsInPerSecond,
-      packetsOutPerSecond: this.packetsOutPerSecond,
-      bytesInPerSecond: this.bytesInPerSecond,
-      bytesOutPerSecond: this.bytesOutPerSecond,
     });
 
     this.animationFrameHandle = requestAnimationFrame((t) => this.frame(t));
-  }
-
-  private trackFps(now: number): void {
-    this.fpsAccumulator += 1;
-    if (now - this.fpsWindowStart >= 500) {
-      this.fps = (this.fpsAccumulator * 1000) / (now - this.fpsWindowStart);
-      this.fpsAccumulator = 0;
-      this.fpsWindowStart = now;
-    }
-  }
-
-  /**
-   * Diffs NetworkClient's lifetime send/receive/byte counters against their values at the
-   * start of the current window to produce packets-per-second and bytes-per-second rates,
-   * refreshed once every PACKET_RATE_WINDOW_MS (1s) — the same "accumulate, then rate on a
-   * timed window" shape as trackFps() above, just keyed off NetworkClient's counters
-   * instead of a local one.
-   */
-  private trackPacketRates(now: number): void {
-    if (now - this.packetRateWindowStart < PACKET_RATE_WINDOW_MS) {
-      return;
-    }
-
-    const elapsedSeconds = (now - this.packetRateWindowStart) / 1000;
-    const totalPacketsIn = this.networkClient.totalPacketsReceived;
-    const totalPacketsOut = this.networkClient.totalPacketsSent;
-    const totalBytesIn = this.networkClient.totalBytesReceived;
-    const totalBytesOut = this.networkClient.totalBytesSent;
-
-    this.packetsInPerSecond = Math.round((totalPacketsIn - this.packetsInAtWindowStart) / elapsedSeconds);
-    this.packetsOutPerSecond = Math.round((totalPacketsOut - this.packetsOutAtWindowStart) / elapsedSeconds);
-    this.bytesInPerSecond = (totalBytesIn - this.bytesInAtWindowStart) / elapsedSeconds;
-    this.bytesOutPerSecond = (totalBytesOut - this.bytesOutAtWindowStart) / elapsedSeconds;
-
-    this.packetsInAtWindowStart = totalPacketsIn;
-    this.packetsOutAtWindowStart = totalPacketsOut;
-    this.bytesInAtWindowStart = totalBytesIn;
-    this.bytesOutAtWindowStart = totalBytesOut;
-    this.packetRateWindowStart = now;
   }
 }

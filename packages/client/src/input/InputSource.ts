@@ -3,12 +3,12 @@ export type InputChangeListener<T> = (value: T) => void;
 /**
  * Shared shape for a browser input source that samples to a single value of type `T` and
  * notifies listeners only when that value actually changes — not on every underlying
- * browser event. KeyboardInputSource (T = direction bitmask) and MouseAngleInputSource
+ * browser event. KeyboardInputSource (T = direction bitmask) and MouseInputSource
  * (T = aim angle in radians) both extend this: same attach/detach lifecycle and
  * listener-set/emit-if-changed bookkeeping, but each defines its own `hasChanged()`
  * threshold, since a bitmask's "changed" is exact equality while an angle's is a small
  * epsilon (matching the reference implementation's own `Math.abs(this.angle - angle) >
- * 0.005` throttle — see MouseAngleInputSource) — forcing both through one comparison rule
+ * 0.005` throttle — see MouseInputSource) — forcing both through one comparison rule
  * would be wrong for at least one of them.
  */
 export abstract class InputSource<T> {

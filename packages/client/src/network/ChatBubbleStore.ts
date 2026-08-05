@@ -84,6 +84,10 @@ export class ChatBubbleStore {
   }
 }
 
+/** Module-level singleton — one per page, reached for directly instead of threaded through constructors/DI. */
+const instance = new ChatBubbleStore();
+export const chatBubbleStore = (): ChatBubbleStore => instance;
+
 /**
  * Ages every bubble in `bubbles` by `dt`, eases each bubble's `renderOffset` toward its
  * target stacked slot, and removes any bubble whose age has passed CHAT_BUBBLE_LIFETIME —

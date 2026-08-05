@@ -24,3 +24,7 @@ export class EntityTypeRegistry {
     return this.types.get(entityId) ?? EntityType.Player;
   }
 }
+
+/** Module-level singleton — one per page, reached for directly instead of threaded through constructors/DI. */
+const instance = new EntityTypeRegistry();
+export const entityTypeRegistry = (): EntityTypeRegistry => instance;
