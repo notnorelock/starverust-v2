@@ -23,6 +23,17 @@ export interface EntitySnapshot {
    * while the player is actively aiming.
    */
   angle: number;
+  /**
+   * ActionState bitmask (see EntityActionStateComponent, shared — Idle/Walk today) — the
+   * server's own authoritative idle/walk determination (whether RenderPositionComponent has
+   * caught up to PositionComponent, see PositionSmoothingSystem), broadcast so the client
+   * renders the real server state directly instead of re-deriving an approximation from
+   * `speed` alone (which can't reliably distinguish "stopped this exact tick" from "still
+   * catching up" the way the server's own position-comparison can). Entities with no
+   * EntityActionStateComponent (e.g. static world geometry) default to ActionState.Idle at
+   * the packet-building call site, matching that component's own constructor default.
+   */
+  action: number;
 }
 
 /**
@@ -70,7 +81,7 @@ export interface WorldSnapshotPacket {
 // [0..3] u32 serverTick
 // [4..5] u16 entityCount
 // repeated per entity: u32 entityId, u8 entityType, u32 ownerPid, f32 x, f32 y, f32 speed,
-//   f32 angle, string nickname (u16 length prefix + UTF-8 bytes)
+//   f32 angle, u8 action, string nickname (u16 length prefix + UTF-8 bytes)
 
 function writeEntities(entities: readonly WorldSnapshotEntity[]): void {
   for (const entity of entities) {
@@ -81,6 +92,7 @@ function writeEntities(entities: readonly WorldSnapshotEntity[]): void {
     writeF32(entity.y);
     writeF32(entity.speed);
     writeF32(entity.angle);
+    writeU8(entity.action);
     writeString(entity.nickname);
   }
 }
@@ -115,8 +127,9 @@ export function decodeWorldSnapshot(): WorldSnapshotPacket {
     const y = readF32();
     const speed = readF32();
     const angle = readF32();
+    const action = readU8();
     const nickname = readString();
-    entities.push({ entityId, entityType, ownerPid, x, y, speed, angle, nickname });
+    entities.push({ entityId, entityType, ownerPid, x, y, speed, angle, action, nickname });
   }
 
   return { serverTick, entities };

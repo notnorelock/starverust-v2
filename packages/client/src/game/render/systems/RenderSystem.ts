@@ -1,4 +1,4 @@
-import { System, PositionComponent, EntityType, type ComponentType, type World } from '@starve/shared';
+import { System, PositionComponent, EntityType, ActionState, type ComponentType, type World } from '@starve/shared';
 import type { WebGLCanvasProvider } from '../../../engine/render/WebGLCanvasProvider';
 import type { SpriteRenderer } from '../../../engine/render/SpriteRenderer';
 import type { ColorQuadRenderer } from '../../../engine/render/ColorQuadRenderer';
@@ -6,6 +6,7 @@ import type { Camera2D } from '../../../engine/camera/Camera2D';
 import type { MouseInputSource } from '../../../engine/input/MouseInputSource';
 import { RenderableComponent } from '../../../engine/ecs/components/RenderableComponent';
 import { InterpolationComponent } from '../../../engine/ecs/components/InterpolationComponent';
+import { PlayerAnimationComponent } from '../../ecs/components/PlayerAnimationComponent';
 import { snapshotBuffer } from '../../network/SnapshotBuffer';
 import { entityTypeRegistry } from '../../network/EntityTypeRegistry';
 import { localPlayer } from '../../core/LocalPlayerDataStore';
@@ -72,7 +73,7 @@ export class RenderSystem extends System {
     const sampled = snapshotBuffer().sample(dt);
 
     for (const sample of sampled) {
-      this.ensureInterpolatedEntity(world, sample.entityId, sample.x, sample.y, sample.angle);
+      this.ensureInterpolatedEntity(world, sample.entityId, sample.x, sample.y, sample.angle, sample.speed, sample.action);
     }
 
     const localPosition = sampled.find((s) => s.entityId === localPlayer().entityId);
@@ -82,10 +83,18 @@ export class RenderSystem extends System {
     this.camera.update(dt);
     chatBubbleStore().advance(dt);
 
-    this.draw(world);
+    this.draw(world, dt);
   }
 
-  private ensureInterpolatedEntity(world: World, entityId: number, x: number, y: number, angle: number): void {
+  private ensureInterpolatedEntity(
+    world: World,
+    entityId: number,
+    x: number,
+    y: number,
+    angle: number,
+    speed: number,
+    action: number,
+  ): void {
     if (!world.entities.isAlive(entityId)) {
       // First time this server-assigned entityId is seen on the client — mirror it
       // into the client's own EntityRegistry rather than requiring a local createEntity()
@@ -98,20 +107,29 @@ export class RenderSystem extends System {
       interpolation = world.entities.addComponent(
         entityId,
         InterpolationComponent,
-        new InterpolationComponent(entityId, x, y, angle),
+        new InterpolationComponent(entityId, x, y, angle, speed, action),
       );
     }
     interpolation.x = x;
     interpolation.y = y;
     interpolation.angle = angle;
+    interpolation.speed = speed;
+    interpolation.action = action;
 
     if (!world.entities.hasComponent(entityId, RenderableComponent)) {
       const isLocalPlayer = entityId === localPlayer().entityId;
       world.entities.addComponent(entityId, RenderableComponent, new RenderableComponent(entityId, { isLocalPlayer }));
     }
+
+    // Only players have arm-swing animation (see PlayerAnimationComponent) — gated by
+    // EntityType rather than added unconditionally, since a future non-player entity type
+    // (e.g. WorldGeometry) has no arms to animate.
+    if (entityTypeRegistry().get(entityId) === EntityType.Player && !world.entities.hasComponent(entityId, PlayerAnimationComponent)) {
+      world.entities.addComponent(entityId, PlayerAnimationComponent, new PlayerAnimationComponent(entityId));
+    }
   }
 
-  private draw(world: World): void {
+  private draw(world: World, dt: number): void {
     const { width, height } = this.canvasProvider.canvas;
     this.sprites.beginFrame(width, height);
 
@@ -134,8 +152,13 @@ export class RenderSystem extends System {
         angle = this.mouseInput.sample();
       }
 
+      const animation = world.entities.getComponent(entityId, PlayerAnimationComponent);
+      const speed = interpolation instanceof InterpolationComponent ? interpolation.speed : 0;
+      const action = interpolation instanceof InterpolationComponent ? interpolation.action : ActionState.Idle;
+      const animationOffset = animation?.update(dt, action, speed);
+
       const entityRenderer = this.rendererFor(entityId);
-      entityRenderer?.draw({ entityId, screen, angle, isLocalPlayer: renderable.isLocalPlayer });
+      entityRenderer?.draw({ entityId, screen, angle, isLocalPlayer: renderable.isLocalPlayer, animationOffset });
     }
 
     // Debug lag lines draw in a second pass (a separate shader program/beginFrame — see

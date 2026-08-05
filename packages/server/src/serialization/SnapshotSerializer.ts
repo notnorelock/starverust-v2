@@ -6,6 +6,8 @@ import {
   EntityType,
   EntityOwnerComponent,
   AimComponent,
+  EntityActionStateComponent,
+  ActionState,
   type World,
 } from '@starve/shared';
 import { encodeWorldSnapshot, NO_OWNER_PID, type WorldSnapshotEntity } from '@starve/protocol';
@@ -24,11 +26,12 @@ import { encodeWorldSnapshot, NO_OWNER_PID, type WorldSnapshotEntity } from '@st
  * while sprinting) instead of assuming a fixed constant — see SnapshotBuffer — each
  * entity's EntityTypeComponent (falling back to EntityType.Player if somehow absent, same
  * default the wire format itself uses), and each entity's EntityOwnerComponent (falling
- * back to NO_OWNER_PID if absent — e.g. static world geometry has no owning player), and
- * each entity's AimComponent (falling back to 0 if absent), so this one-time catch-up
- * packet is self-contained and a newly-connected client doesn't depend on the separate
- * EntityInsertPacket catch-up loop (see PlayerSession.onHelloReceived) having already run
- * first.
+ * back to NO_OWNER_PID if absent — e.g. static world geometry has no owning player), each
+ * entity's AimComponent (falling back to 0 if absent), and each entity's
+ * EntityActionStateComponent (falling back to ActionState.Idle if absent — e.g. static
+ * world geometry never walks), so this one-time catch-up packet is self-contained and a
+ * newly-connected client doesn't depend on the separate EntityInsertPacket catch-up loop
+ * (see PlayerSession.onHelloReceived) having already run first.
  *
  * Also broadcasts each owned entity's nickname, resolved via `nicknameForPid` — nickname
  * itself isn't ECS state (it lives on ClientConnection/ConnectionRegistry, session data,
@@ -49,6 +52,7 @@ export function serializeWorldSnapshot(
     const entityType = world.entities.getComponent(entityId, EntityTypeComponent)?.entityType ?? EntityType.Player;
     const ownerPid = world.entities.getComponent(entityId, EntityOwnerComponent)?.ownerPid ?? NO_OWNER_PID;
     const angle = world.entities.getComponent(entityId, AimComponent)?.angle ?? 0;
+    const action = world.entities.getComponent(entityId, EntityActionStateComponent)?.action ?? ActionState.Idle;
     const nickname = ownerPid === NO_OWNER_PID ? '' : (nicknameForPid(ownerPid) ?? '');
 
     const renderPosition = world.entities.getComponent(entityId, RenderPositionComponent);
@@ -61,6 +65,7 @@ export function serializeWorldSnapshot(
         y: renderPosition.y,
         speed,
         angle,
+        action,
         nickname,
       });
       continue;
@@ -69,7 +74,7 @@ export function serializeWorldSnapshot(
     if (!position) {
       continue;
     }
-    entities.push({ entityId, entityType, ownerPid, x: position.x, y: position.y, speed, angle, nickname });
+    entities.push({ entityId, entityType, ownerPid, x: position.x, y: position.y, speed, angle, action, nickname });
   }
 
   return encodeWorldSnapshot({ serverTick, entities });

@@ -6,6 +6,15 @@ export interface EntityRenderContext {
   screen: ScreenPoint;
   angle: number;
   isLocalPlayer: boolean;
+  /**
+   * A generic idle/walk-style animation offset (world/screen pixels), optional since not
+   * every entity type has one — RenderSystem computes it per entity type as needed (see
+   * PlayerAnimationComponent for the player's own idle/walk/sprint arm-swing) and passes it
+   * through here rather than this interface naming anything player-specific, so a future
+   * non-player EntityRenderer can use the same field for its own animation without this
+   * type needing to grow a second, differently-named offset for it.
+   */
+  animationOffset?: ScreenPoint;
 }
 
 /**

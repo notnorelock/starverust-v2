@@ -4,6 +4,8 @@ import {
   EntityTypeComponent,
   EntityType,
   EntityOwnerComponent,
+  EntityActionStateComponent,
+  ActionState,
   type World,
   type WorldBounds,
 } from '@starve/shared';
@@ -114,8 +116,16 @@ export async function onHelloReceived(
     const position = world.entities.getComponent(entityId, PositionComponent)!;
     const entityType = world.entities.getComponent(entityId, EntityTypeComponent)!;
     const ownerPid = world.entities.getComponent(entityId, EntityOwnerComponent)?.ownerPid ?? NO_OWNER_PID;
+    const action = world.entities.getComponent(entityId, EntityActionStateComponent)?.action ?? ActionState.Idle;
     connection.send(
-      encodeEntityInsert({ entityId, entityType: entityType.entityType, ownerPid, x: position.x, y: position.y }),
+      encodeEntityInsert({
+        entityId,
+        entityType: entityType.entityType,
+        ownerPid,
+        x: position.x,
+        y: position.y,
+        action,
+      }),
     );
   }
   for (const other of connections.all()) {
@@ -148,6 +158,10 @@ export async function onHelloReceived(
       ownerPid: pid,
       x: worldConfig.spawnX,
       y: worldConfig.spawnY,
+      // A freshly-spawned player entity always starts Idle — see PlayerEntityFactory,
+      // which attaches EntityActionStateComponent defaulting to ActionState.Idle — so this
+      // is the actual current value, not just a fallback default.
+      action: ActionState.Idle,
     }),
   );
   network.broadcast(encodePlayerJoin({ pid, entityId, nickname }));

@@ -22,6 +22,14 @@ interface RenderedEntity {
   angle: number;
   /** Latest known network-broadcast facing angle (radians) — see EntitySnapshot.angle. */
   rAngle: number;
+  /**
+   * This entity's latest broadcast ActionState bitmask (see EntityActionStateComponent,
+   * shared) — the server's own authoritative idle/walk determination, passed straight
+   * through unmodified (not itself chased/smoothed, same as `angle`'s `rAngle` counterpart
+   * has no smoothed twin — action state is a discrete flag set, not a continuous value
+   * there's anything meaningful to interpolate between).
+   */
+  action: number;
 }
 
 export interface InterpolatedEntity {
@@ -29,6 +37,10 @@ export interface InterpolatedEntity {
   x: number;
   y: number;
   angle: number;
+  /** This entity's latest broadcast speed (world units/second) — see RenderedEntity.speed. */
+  speed: number;
+  /** This entity's latest broadcast ActionState bitmask — see RenderedEntity.action. Drives idle/walk/sprint arm animation (see PlayerAnimationComponent) — the authoritative signal from the server, not a client-side guess derived from `speed`. */
+  action: number;
 }
 
 /**
@@ -88,6 +100,7 @@ export class SnapshotBuffer {
         speed: target.speed,
         angle: target.angle,
         rAngle: target.angle,
+        action: target.action,
       });
     }
   }
@@ -109,6 +122,7 @@ export class SnapshotBuffer {
           speed: target.speed,
           angle: target.angle,
           rAngle: target.angle,
+          action: target.action,
         });
         continue;
       }
@@ -117,6 +131,7 @@ export class SnapshotBuffer {
       render.r.y = target.y;
       render.speed = target.speed;
       render.rAngle = target.angle;
+      render.action = target.action;
 
       const dx = target.x - render.x;
       const dy = target.y - render.y;
@@ -141,7 +156,7 @@ export class SnapshotBuffer {
       const step = Math.max(render.speed, MIN_CHASE_SPEED) * dt;
       chaseTowards(render, step);
       chaseAngleTowards(render, dt);
-      result.push({ entityId, x: render.x, y: render.y, angle: render.angle });
+      result.push({ entityId, x: render.x, y: render.y, angle: render.angle, speed: render.speed, action: render.action });
     }
 
     return result;
@@ -160,7 +175,9 @@ export class SnapshotBuffer {
    */
   latestRawPosition(entityId: number): InterpolatedEntity | undefined {
     const render = this.rendered.get(entityId);
-    return render ? { entityId, x: render.r.x, y: render.r.y, angle: render.rAngle } : undefined;
+    return render
+      ? { entityId, x: render.r.x, y: render.r.y, angle: render.rAngle, speed: render.speed, action: render.action }
+      : undefined;
   }
 
   /**

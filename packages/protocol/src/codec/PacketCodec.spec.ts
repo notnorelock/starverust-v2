@@ -37,7 +37,7 @@ describe('decodeAny', () => {
       encodeWorldSnapshot({
         serverTick: 5,
         entities: [
-          { entityId: 1, entityType: 0, ownerPid: NO_OWNER_PID, x: 1, y: 2, speed: 200, angle: 0, nickname: '' },
+          { entityId: 1, entityType: 0, ownerPid: NO_OWNER_PID, x: 1, y: 2, speed: 200, angle: 0, action: 1, nickname: '' },
         ],
       }),
     );

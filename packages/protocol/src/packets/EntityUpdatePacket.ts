@@ -1,5 +1,5 @@
-import { beginWrite, writeU16, writeU32, writeF32, endWrite } from '../io/BufferWriter';
-import { readU16, readU32, readF32 } from '../io/BufferReader';
+import { beginWrite, writeU8, writeU16, writeU32, writeF32, endWrite } from '../io/BufferWriter';
+import { readU8, readU16, readU32, readF32 } from '../io/BufferReader';
 import { writeHeader, HEADER_SIZE } from '../io/PacketHeader';
 import { Opcode } from '../opcodes';
 import type { EntitySnapshot } from './WorldSnapshotPacket';
@@ -25,9 +25,9 @@ export interface EntityUpdatePacket {
 // Payload layout:
 // [0..3] u32 serverTick
 // [4..5] u16 entityCount
-// repeated per entity (20 bytes): u32 entityId, f32 x, f32 y, f32 speed, f32 angle
+// repeated per entity (21 bytes): u32 entityId, f32 x, f32 y, f32 speed, f32 angle, u8 action
 const HEADER_FIELDS_SIZE = 6;
-const ENTITY_RECORD_SIZE = 20;
+const ENTITY_RECORD_SIZE = 21;
 
 export function encodeEntityUpdate(packet: EntityUpdatePacket): ArrayBuffer {
   const payloadSize = HEADER_FIELDS_SIZE + packet.entities.length * ENTITY_RECORD_SIZE;
@@ -43,6 +43,7 @@ export function encodeEntityUpdate(packet: EntityUpdatePacket): ArrayBuffer {
     writeF32(entity.y);
     writeF32(entity.speed);
     writeF32(entity.angle);
+    writeU8(entity.action);
   }
 
   return endWrite();
@@ -59,7 +60,8 @@ export function decodeEntityUpdate(): EntityUpdatePacket {
     const y = readF32();
     const speed = readF32();
     const angle = readF32();
-    entities.push({ entityId, x, y, speed, angle });
+    const action = readU8();
+    entities.push({ entityId, x, y, speed, angle, action });
   }
 
   return { serverTick, entities };

@@ -41,7 +41,6 @@ const NICKNAME_COLOR = '#f5f5f5';
 
 const CHAT_BUBBLE_FONT = '13px sans-serif';
 const CHAT_BUBBLE_TEXT_COLOR = '#fff';
-const CHAT_BUBBLE_PADDING_X = 10;
 /** Base vertical offset (px, above the entity) of the closest (oldest, index-0) bubble — ported from the reference's `-110 * scale`. */
 const CHAT_BUBBLE_BASE_OFFSET_Y = HEAD_DRAW_HEIGHT / 2 + 60;
 
@@ -58,11 +57,17 @@ export interface PlayerTextures {
  * right arm — see @starve/assets's spritePartUrl and ClientBootstrap's texture loads),
  * each its own quad offset from the entity's center and rotated together to face the aim
  * angle — arms are drawn first (behind), head last (in front), matching the source art's
- * intended layering. There's no independent per-limb animation yet (e.g. arms swinging
- * while walking): all three parts share exactly the same rotation and move together as one
- * rigid group, the direct sprite-based equivalent of the old single circle+facing-line
- * always pointing at the aim angle. A future walk-cycle/attack-animation system would give
- * the arms their own offset/rotation relative to the group instead of a fixed one.
+ * intended layering.
+ *
+ * `context.animationOffset` (see RenderSystem, which advances PlayerAnimationComponent and
+ * passes the result through) nudges BOTH arms' base offset identically — ported from the
+ * reference client's `draw_player()`, which reads `x = this.idle.v` / `y = this.walk.v`
+ * and folds them into the same per-arm offset expression used for the base position
+ * (`-img.width/4 - scale*(49+x)`, etc.), rather than treating idle/walk as a separate
+ * rotation or a per-arm phase difference. There is deliberately no left/right phase offset
+ * (both arms swing in lockstep) and no rotation component to the animation at all — that
+ * matches the reference exactly; only its ATTACK-state swing (out of scope here) rotates
+ * each hand independently.
  *
  * Also draws the entity's nickname centered above it (see NicknameRegistry — falls back to
  * nothing drawn if the nickname hasn't arrived yet, e.g. a single frame right after
@@ -86,9 +91,14 @@ export class PlayerRenderer extends EntityRenderer {
   }
 
   draw(context: EntityRenderContext): void {
-    const { screen, angle } = context;
+    const { screen, angle, animationOffset } = context;
     const textures = this.textures();
     const renderRotation = angle + SPRITE_FACING_OFFSET;
+    // Defaults to (0,0) for any entity type reaching this without an animation component —
+    // RenderSystem only attaches PlayerAnimationComponent to EntityType.Player, but the
+    // field itself is optional/generic (see EntityRenderContext's own doc comment).
+    const animX = animationOffset?.x ?? 0;
+    const animY = animationOffset?.y ?? 0;
 
     const cos = Math.cos(renderRotation);
     const sin = Math.sin(renderRotation);
@@ -107,8 +117,10 @@ export class PlayerRenderer extends EntityRenderer {
       // renderRotation/rotateOffset — so "-ARM_OFFSET_X, +ARM_OFFSET_Y" here is what lands
       // on the character's own left (viewer's left when facing the viewer) at angle=0, not
       // a naive pre-rotation "-X = left" assumption. Verified empirically against the
-      // actual rendered output (the two textures were swapped before this).
-      const armCenter = rotateOffset(ARM_OFFSET_X, ARM_OFFSET_Y);
+      // actual rendered output (the two textures were swapped before this). animX/animY are
+      // folded into the SAME offset (identical for both arms — see this class's doc
+      // comment for why there's no left/right phase difference), not a separate rotation.
+      const armCenter = rotateOffset(ARM_OFFSET_X + animX, ARM_OFFSET_Y + animY);
       this.sprites.draw({
         texture: textures.leftArm,
         x: armCenter.x - ARM_DRAW_WIDTH / 2,
@@ -119,7 +131,7 @@ export class PlayerRenderer extends EntityRenderer {
       });
     }
     if (textures.rightArm) {
-      const armCenter = rotateOffset(-ARM_OFFSET_X, ARM_OFFSET_Y);
+      const armCenter = rotateOffset(-(ARM_OFFSET_X + animX), ARM_OFFSET_Y + animY);
       this.sprites.draw({
         texture: textures.rightArm,
         x: armCenter.x - ARM_DRAW_WIDTH / 2,
@@ -142,7 +154,7 @@ export class PlayerRenderer extends EntityRenderer {
 
     const nickname = nicknameRegistry().get(context.entityId);
     if (nickname) {
-      this.drawText(nickname, NICKNAME_FONT, NICKNAME_COLOR, screen.x, screen.y - NICKNAME_OFFSET_Y, 'center', 1);
+      this.drawText(nickname, NICKNAME_FONT, NICKNAME_COLOR, screen.x, screen.y - NICKNAME_OFFSET_Y, 1);
     }
 
     this.drawChatBubbles(context);
@@ -173,27 +185,18 @@ export class PlayerRenderer extends EntityRenderer {
       }
 
       const centerY = screen.y - CHAT_BUBBLE_BASE_OFFSET_Y - bubble.renderOffset;
-      this.drawText(bubble.text, CHAT_BUBBLE_FONT, CHAT_BUBBLE_TEXT_COLOR, screen.x, centerY, 'left', opacity);
+      this.drawText(bubble.text, CHAT_BUBBLE_FONT, CHAT_BUBBLE_TEXT_COLOR, screen.x, centerY, opacity);
     }
   }
 
-  private drawText(
-    text: string,
-    font: string,
-    color: string,
-    x: number,
-    y: number,
-    align: 'left' | 'center',
-    opacity: number,
-  ): void {
+  /** Draws `text` centered on (x, y) — both nickname and chat bubble text are always center-aligned on the entity, now that the chat bubble background box (which the old left-aligned-inside-a-box layout was designed for) is gone. */
+  private drawText(text: string, font: string, color: string, x: number, y: number, opacity: number): void {
     const baked = this.textCache.get(text, font, color);
-    const left = align === 'center' ? x - baked.width / 2 : x + CHAT_BUBBLE_PADDING_X;
-    const top = y - baked.height / 2;
 
     this.sprites.draw({
       texture: baked.texture,
-      x: left,
-      y: top,
+      x: x - baked.width / 2,
+      y: y - baked.height / 2,
       width: baked.width,
       height: baked.height,
       opacity,

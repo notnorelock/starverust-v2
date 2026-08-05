@@ -19,10 +19,10 @@ describe('EntityUpdatePacket', () => {
     expect(roundTrip(packet)).toEqual(packet);
   });
 
-  it('round-trips with a single entity, including angle', () => {
+  it('round-trips with a single entity, including angle and action', () => {
     const packet: EntityUpdatePacket = {
       serverTick: 100,
-      entities: [{ entityId: 7, x: 12.5, y: -3.25, speed: 200, angle: Math.PI / 2 }],
+      entities: [{ entityId: 7, x: 12.5, y: -3.25, speed: 200, angle: Math.PI / 2, action: 2 }],
     };
     const result = roundTrip(packet);
     expect(result.serverTick).toBe(100);
@@ -32,15 +32,17 @@ describe('EntityUpdatePacket', () => {
     expect(result.entities[0]!.y).toBeCloseTo(-3.25, 5);
     expect(result.entities[0]!.speed).toBeCloseTo(200, 5);
     expect(result.entities[0]!.angle).toBeCloseTo(Math.PI / 2, 5);
+    expect(result.entities[0]!.action).toBe(2);
   });
 
-  it('round-trips with many entities preserving order and per-entity angle', () => {
+  it('round-trips with many entities preserving order and per-entity angle/action', () => {
     const entities = Array.from({ length: 50 }, (_, i) => ({
       entityId: i,
       x: i * 1.5,
       y: -i * 0.5,
       speed: i % 2 === 0 ? 200 : 350,
       angle: (i / 50) * Math.PI * 2 - Math.PI,
+      action: i % 2 === 0 ? 1 : 2,
     }));
     const packet: EntityUpdatePacket = { serverTick: 999, entities };
     const result = roundTrip(packet);
@@ -51,18 +53,19 @@ describe('EntityUpdatePacket', () => {
       expect(entity.y).toBeCloseTo(-i * 0.5, 4);
       expect(entity.speed).toBeCloseTo(i % 2 === 0 ? 200 : 350, 4);
       expect(entity.angle).toBeCloseTo((i / 50) * Math.PI * 2 - Math.PI, 4);
+      expect(entity.action).toBe(i % 2 === 0 ? 1 : 2);
     });
   });
 
   it('produces a header with the correct opcode and payload length', () => {
     const buffer = encodeEntityUpdate({
       serverTick: 0,
-      entities: [{ entityId: 1, x: 0, y: 0, speed: 0, angle: 0 }],
+      entities: [{ entityId: 1, x: 0, y: 0, speed: 0, angle: 0, action: 1 }],
     });
     beginRead(buffer);
     const header = readHeader();
     endRead();
     expect(header.opcode).toBe(Opcode.EntityUpdate);
-    expect(header.length).toBe(6 + 20);
+    expect(header.length).toBe(6 + 21);
   });
 });

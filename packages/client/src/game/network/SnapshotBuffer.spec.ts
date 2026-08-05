@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { SnapshotBuffer } from './SnapshotBuffer';
-import { PLAYER_MOVE_SPEED, PLAYER_SPRINT_SPEED, CLIENT_POSITION_SNAP_DISTANCE } from '@starve/shared';
+import { PLAYER_MOVE_SPEED, PLAYER_SPRINT_SPEED, CLIENT_POSITION_SNAP_DISTANCE, ActionState } from '@starve/shared';
 import type { WorldSnapshotPacket, EntityUpdatePacket, WorldSnapshotEntity, EntitySnapshot } from '@starve/protocol';
 
 function snapshotEntity(fields: Partial<WorldSnapshotEntity> & { entityId: number; x: number; y: number }): WorldSnapshotEntity {
-  return { entityType: 0, ownerPid: 0, speed: PLAYER_MOVE_SPEED, angle: 0, nickname: '', ...fields };
+  return { entityType: 0, ownerPid: 0, speed: PLAYER_MOVE_SPEED, angle: 0, action: ActionState.Idle, nickname: '', ...fields };
 }
 
 function updateEntity(fields: Partial<EntitySnapshot> & { entityId: number; x: number; y: number }): EntitySnapshot {
-  return { speed: PLAYER_MOVE_SPEED, angle: 0, ...fields };
+  return { speed: PLAYER_MOVE_SPEED, angle: 0, action: ActionState.Idle, ...fields };
 }
 
 function snapshot(entities: WorldSnapshotEntity[]): WorldSnapshotPacket {
@@ -29,7 +29,9 @@ describe('SnapshotBuffer', () => {
     it('initializes render state exactly at the given position for each entity', () => {
       const buffer = new SnapshotBuffer();
       buffer.seed(snapshot([snapshotEntity({ entityId: 1, x: 5, y: 5 })]));
-      expect(buffer.sample(1 / 60)).toEqual([{ entityId: 1, x: 5, y: 5, angle: 0 }]);
+      expect(buffer.sample(1 / 60)).toEqual([
+        { entityId: 1, x: 5, y: 5, angle: 0, speed: PLAYER_MOVE_SPEED, action: ActionState.Idle },
+      ]);
     });
 
     it('does not overwrite an entity that already has render state (e.g. from an EntityUpdatePacket that arrived first)', () => {
@@ -37,7 +39,9 @@ describe('SnapshotBuffer', () => {
       buffer.push(update(1, [updateEntity({ entityId: 1, x: 50, y: 50 })]));
       buffer.seed(snapshot([snapshotEntity({ entityId: 1, x: 0, y: 0 })]));
 
-      expect(buffer.sample(1 / 60)).toEqual([{ entityId: 1, x: 50, y: 50, angle: 0 }]);
+      expect(buffer.sample(1 / 60)).toEqual([
+        { entityId: 1, x: 50, y: 50, angle: 0, speed: PLAYER_MOVE_SPEED, action: ActionState.Idle },
+      ]);
     });
   });
 
@@ -45,7 +49,9 @@ describe('SnapshotBuffer', () => {
     it('seeds the render position exactly at the target on the first update mentioning an entity', () => {
       const buffer = new SnapshotBuffer();
       buffer.push(update(1, [updateEntity({ entityId: 1, x: 5, y: 5 })]));
-      expect(buffer.sample(1 / 60)).toEqual([{ entityId: 1, x: 5, y: 5, angle: 0 }]);
+      expect(buffer.sample(1 / 60)).toEqual([
+        { entityId: 1, x: 5, y: 5, angle: 0, speed: PLAYER_MOVE_SPEED, action: ActionState.Idle },
+      ]);
     });
 
     it("chases the latest network position by the entity's broadcast speed * dt rather than jumping straight to it", () => {
@@ -238,7 +244,9 @@ describe('SnapshotBuffer', () => {
       buffer.push(update(2, [updateEntity({ entityId: 1, x: 50, y: 50 })]));
       const result = buffer.sample(1 / 60);
 
-      expect(result).toEqual([{ entityId: 1, x: 50, y: 50, angle: 0 }]);
+      expect(result).toEqual([
+        { entityId: 1, x: 50, y: 50, angle: 0, speed: PLAYER_MOVE_SPEED, action: ActionState.Idle },
+      ]);
     });
   });
 
@@ -250,7 +258,14 @@ describe('SnapshotBuffer', () => {
 
       buffer.push(update(2, [updateEntity({ entityId: 1, x: 1000, y: 0 })]));
 
-      expect(buffer.latestRawPosition(1)).toEqual({ entityId: 1, x: 1000, y: 0, angle: 0 });
+      expect(buffer.latestRawPosition(1)).toEqual({
+        entityId: 1,
+        x: 1000,
+        y: 0,
+        angle: 0,
+        speed: PLAYER_MOVE_SPEED,
+        action: ActionState.Idle,
+      });
     });
 
     it('returns undefined when the entity is unknown', () => {

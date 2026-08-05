@@ -23,15 +23,25 @@ export interface EntityInsertPacket {
   ownerPid: number;
   x: number;
   y: number;
+  /**
+   * ActionState bitmask (see EntityActionStateComponent, shared) — included here too (not
+   * just on WorldSnapshotPacket/EntityUpdatePacket) so a freshly-spawned entity has a
+   * correct idle/walk render state from the very first frame, rather than defaulting to
+   * whatever the client assumes until its first EntityUpdatePacket arrives a tick later.
+   * Entities with no EntityActionStateComponent (e.g. static world geometry) default to
+   * ActionState.Idle at the packet-building call site.
+   */
+  action: number;
 }
 
-// Payload layout (17 bytes):
+// Payload layout (18 bytes):
 // [0..3]  u32 entityId
 // [4]     u8  entityType (see EntityType)
 // [5..8]  u32 ownerPid
 // [9..12] f32 x
 // [13..16] f32 y
-const PAYLOAD_SIZE = 17;
+// [17]    u8  action (see EntityActionStateComponent)
+const PAYLOAD_SIZE = 18;
 
 export function encodeEntityInsert(packet: EntityInsertPacket): ArrayBuffer {
   beginWrite(HEADER_SIZE + PAYLOAD_SIZE);
@@ -42,6 +52,7 @@ export function encodeEntityInsert(packet: EntityInsertPacket): ArrayBuffer {
   writeU32(packet.ownerPid);
   writeF32(packet.x);
   writeF32(packet.y);
+  writeU8(packet.action);
 
   return endWrite();
 }
@@ -53,6 +64,7 @@ export function decodeEntityInsert(): EntityInsertPacket {
   const ownerPid = readU32();
   const x = readF32();
   const y = readF32();
+  const action = readU8();
 
-  return { entityId, entityType, ownerPid, x, y };
+  return { entityId, entityType, ownerPid, x, y, action };
 }

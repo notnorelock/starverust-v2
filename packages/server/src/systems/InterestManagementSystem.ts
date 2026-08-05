@@ -4,6 +4,8 @@ import {
   RenderPositionComponent,
   VelocityComponent,
   AimComponent,
+  EntityActionStateComponent,
+  ActionState,
   SpatialHashGrid,
   type ComponentType,
   type World,
@@ -91,7 +93,8 @@ export class InterestManagementSystem extends System {
         const velocity = world.entities.getComponent(entityId, VelocityComponent)!;
         const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy);
         const angle = world.entities.getComponent(entityId, AimComponent)?.angle ?? 0;
-        entities.push({ entityId, x: position.x, y: position.y, speed, angle });
+        const action = world.entities.getComponent(entityId, EntityActionStateComponent)?.action ?? ActionState.Idle;
+        entities.push({ entityId, x: position.x, y: position.y, speed, angle, action });
       }
 
       connection.send(encodeEntityUpdate({ serverTick: this.tickCounter, entities }));

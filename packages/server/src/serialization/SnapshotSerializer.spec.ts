@@ -9,6 +9,8 @@ import {
   EntityType,
   EntityOwnerComponent,
   AimComponent,
+  EntityActionStateComponent,
+  ActionState,
 } from '@starve/shared';
 import { decodeAny, finalizeForWire, Opcode } from '@starve/protocol';
 import { serializeWorldSnapshot } from './SnapshotSerializer';
@@ -76,6 +78,7 @@ describe('serializeWorldSnapshot', () => {
       y: 3,
       speed: 0,
       angle: 0,
+      action: ActionState.Idle,
       nickname: '',
     });
   });
@@ -99,6 +102,7 @@ describe('serializeWorldSnapshot', () => {
       y: -8,
       speed: 0,
       angle: 0,
+      action: ActionState.Idle,
       nickname: '',
     });
   });
@@ -215,5 +219,30 @@ describe('serializeWorldSnapshot', () => {
     const noAimEntity = decoded.packet.entities.find((e) => e.entityId === noAim.id)!;
     expect(aimingEntity.angle).toBeCloseTo(Math.PI / 2, 5);
     expect(noAimEntity.angle).toBe(0);
+  });
+
+  it('broadcasts action from EntityActionStateComponent, falling back to ActionState.Idle when absent', () => {
+    const world = createWorld();
+    const walking = world.entities.createEntity();
+    world.entities.addComponent(walking.id, PositionComponent, new PositionComponent(walking.id, 0, 0));
+    world.entities.addComponent(
+      walking.id,
+      EntityActionStateComponent,
+      new EntityActionStateComponent(walking.id, ActionState.Walk),
+    );
+
+    const noAction = world.entities.createEntity();
+    world.entities.addComponent(noAction.id, PositionComponent, new PositionComponent(noAction.id, 0, 0));
+
+    const buffer = serializeWorldSnapshot(world, 0, noNicknames);
+    const decoded = decodeAny(finalizeForWire(buffer));
+
+    if (decoded.opcode !== Opcode.WorldSnapshot) {
+      throw new Error('unexpected opcode');
+    }
+    const walkingEntity = decoded.packet.entities.find((e) => e.entityId === walking.id)!;
+    const noActionEntity = decoded.packet.entities.find((e) => e.entityId === noAction.id)!;
+    expect(walkingEntity.action).toBe(ActionState.Walk);
+    expect(noActionEntity.action).toBe(ActionState.Idle);
   });
 });

@@ -3,6 +3,7 @@ import type { World } from '../core/World';
 import type { ComponentType } from '../core/ComponentType';
 import { PositionComponent } from '../components/PositionComponent';
 import { RenderPositionComponent } from '../components/RenderPositionComponent';
+import { VelocityComponent } from '../components/VelocityComponent';
 import { EntityActionStateComponent, ActionState } from '../components/EntityActionStateComponent';
 import { RENDER_POSITION_CHASE_SPEED } from '../../constants/GameConstants';
 
@@ -15,10 +16,21 @@ import { RENDER_POSITION_CHASE_SPEED } from '../../constants/GameConstants';
  * SnapshotSerializer broadcasts this component, not the raw target, so clients never see
  * the target's own stepping.
  *
- * Also toggles EntityActionStateComponent's Walk/Idle flags — Walk while the render
- * position still has ground to cover to reach the target, Idle once it's caught up —
- * mirroring the reference implementation's `b.action` bit toggling around the same
- * distance check.
+ * Also toggles EntityActionStateComponent's Walk/Idle flags — Walk while the entity is
+ * still receiving movement input for the current throttle window, Idle once both the
+ * render position has caught up AND there's no more movement coming this window.
+ *
+ * The naive version of this check (Walk only while `distance > step` this tick) doesn't
+ * work at this project's tuning: RENDER_POSITION_CHASE_SPEED (900 units/sec) is
+ * deliberately fast enough to always fully close MovementSystem's throttled per-jump
+ * distance (see that constant's own doc comment) within a single tick — so
+ * `distance <= step` is true on every tick, even while an entity is continuously moving,
+ * and Walk would never actually get set. Instead, Walk also stays set whenever
+ * VelocityComponent is nonzero (movement input is currently held, so MovementSystem will
+ * advance the target again within this throttle window even though render has already
+ * caught up to the last jump) — only entities with both zero velocity and a fully-caught-up
+ * render position are Idle. VelocityComponent is optional here (not every PositionComponent
+ * entity has one, e.g. static world geometry), so its absence is treated as "no velocity."
  *
  * Runs last in the pipeline, after MovementSystem and CollisionSystem (world edges
  * included — see WorldBoundaryFactory) have fully resolved the target position for the
@@ -53,19 +65,24 @@ export class PositionSmoothingSystem extends System {
       const dy = target.y - render.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
-      const action = world.entities.getComponent(entityId, EntityActionStateComponent);
-
-      if (distance <= step || distance === 0) {
+      const caughtUp = distance <= step || distance === 0;
+      if (caughtUp) {
         render.x = target.x;
         render.y = target.y;
-        if (action) {
-          action.action &= ~ActionState.Walk;
-          action.action |= ActionState.Idle;
-        }
       } else {
         render.x += (dx / distance) * step;
         render.y += (dy / distance) * step;
-        if (action) {
+      }
+
+      const action = world.entities.getComponent(entityId, EntityActionStateComponent);
+      if (action) {
+        const velocity = world.entities.getComponent(entityId, VelocityComponent);
+        const isMoving = velocity !== undefined && (velocity.vx !== 0 || velocity.vy !== 0);
+
+        if (caughtUp && !isMoving) {
+          action.action &= ~ActionState.Walk;
+          action.action |= ActionState.Idle;
+        } else {
           action.action &= ~ActionState.Idle;
           action.action |= ActionState.Walk;
         }
