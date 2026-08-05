@@ -21,11 +21,6 @@ uniform vec2 uScale;
 uniform float uRotation;
 
 void main() {
-  // See SpriteRenderer's identical vertex shader for the full explanation: rotation runs
-  // directly in screen-space Y-down using the plain rotation matrix, with the one Y-down
-  // -> Y-up flip applied only at the very end (after translation AND rotation), matching
-  // a verified working reference implementation. Do not pre-flip to Y-up before rotating —
-  // that was tried and is wrong (a reflection and a rotation don't commute).
   vec2 centered = (aPosition - 0.5) * uScale;
 
   float c = cos(uRotation);

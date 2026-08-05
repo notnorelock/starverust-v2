@@ -25,22 +25,6 @@ uniform float uRotation;
 out vec2 vTexCoord;
 
 void main() {
-  // Rotation is computed directly in screen-space pixels (Y-DOWN, matching
-  // Camera2D.worldToScreen() and MouseInputSource's atan2(dy,dx) angle convention) using
-  // the plain rotation matrix — NO pre-flip to Y-up before rotating. The single Y-down ->
-  // Y-up conversion (negating Y once) happens only at the very end, after translation AND
-  // rotation are both already fully resolved in screen space — this mirrors a reference
-  // WebGL implementation (biomes-dev's SpriteBatch.draw()) where the equivalent per-vertex
-  // rotation runs in plain Y-down world space and the Y-flip lives entirely in the
-  // projection matrix, applied once, afterward, uniformly to already-rotated vertices.
-  // An earlier version of this shader pre-flipped to Y-up before rotating and negated the
-  // rotation angle to "compensate" — that reasoning was wrong: flipping first and rotating
-  // second is NOT equivalent to rotating first and flipping second (a reflection and a
-  // rotation don't commute), and it visibly reversed rotation direction for asymmetric
-  // sprite art. Verified against the reference project and confirmed correct for
-  // mouse-right/below/above/left test cases before landing this version — don't
-  // reintroduce a pre-rotation flip without re-deriving it against a full multi-vertex
-  // trace, not just a single isolated point (that's what produced the wrong "fix").
   vec2 centered = (aPosition - 0.5) * uScale;
 
   float c = cos(uRotation);
