@@ -15,17 +15,25 @@ const ts = require('typescript');
  * (`0o...`) form — see buildReplacement()/toRandomRadixLiteral() for the exact output shape,
  * which composes two independent transformations: (1) zero-padding each operand's digits to
  * a fixed minimum width (HEX_PAD_WIDTH/OCTAL_PAD_WIDTH) so even a small value like `1` prints
- * long, and (2) splitting the value into two operands that sum back to it and wrapping them
- * in a parenthesized `(a+b)` expression — `26` becomes something like
- * `(0x00000005+0o000000000025)`, not a single bare literal. Both transformations are purely
- * cosmetic and value-preserving (the JS grammar guarantees `0x1a === 26 === 0o32`, and
- * addition is exact for every value this module accepts — see splitOperands()'s own doc
- * comment for why `+` was chosen over a bitwise operator), so — same ceiling already stated
- * for every other cosmetic pass in this obfuscation system — this defeats a literal-text
+ * long, and (2) splitting the value into two operands via a RANDOMLY CHOSEN operator — one of
+ * `+`, `-`, `^`, `|`, `%`, `*` (see OPERATOR_STRATEGIES and each construct* function) — and
+ * wrapping them in a parenthesized `(a<op>b)` expression — `26` becomes something like
+ * `(0x00000005+0o000000000025)` or `(0o000000000144^0x0000001c)` or `(0x0000001a*0x00000001)`,
+ * not a single bare literal. Both transformations are purely cosmetic and value-preserving —
+ * the JS grammar guarantees `0x1a === 26 === 0o32`, and every operator's operand construction
+ * is verified exact for whatever range of values it accepts (see OPERATOR_STRATEGIES' own doc
+ * comment for the summary and each construct* function for why) — so, same ceiling already
+ * stated for every other cosmetic pass in this obfuscation system, this defeats a literal-text
  * grep for a specific decimal constant in the shipped bundle source, nothing more; a
- * breakpoint, console.log, or any real JS parser shows the exact same number immediately,
- * and evaluating the `(a+b)` expression is a single trivial addition, not an obstacle.
- * One exception to the `(a+b)` wrapping: a numeric literal used directly as an object/class
+ * breakpoint, console.log, or any real JS parser shows the exact same number immediately, and
+ * evaluating the `(a<op>b)` expression is a single trivial arithmetic/bitwise op, not an
+ * obstacle. Not every operator is eligible for every value — `^`/`|` are restricted to the
+ * 32-bit-safe range (JS's bitwise ops coerce through ToInt32, silently truncating anything
+ * larger), `-`/`%` avoid the extreme top of the safe-integer range (to keep their own
+ * intermediate operands from overflowing) — buildReplacement() only picks among the operators
+ * that return a valid split for the literal's actual value; `+` has no such restriction and is
+ * always available, so there's always at least one eligible choice.
+ * One exception to the `(a<op>b)` wrapping: a numeric literal used directly as an object/class
  * property or method KEY (`{5: 1}`, `class { 5() {} }`) cannot be replaced with an arbitrary
  * expression there — the grammar requires a single literal token in that position — so those
  * get only the zero-padding transformation, no split/parens; see
@@ -79,37 +87,180 @@ function toPaddedRadixDigits(value, isHex) {
 }
 
 /**
- * Splits `value` into two non-negative operands `[a, b]` such that `a + b === value`, used
- * to wrap a numeric literal in an inert `(a+b)` expression instead of emitting it as one
- * bare literal. Addition, not XOR/bitwise ops, is the operator here specifically because
- * `^`/`|`/`&`/`<<`/`>>` all coerce their operands through ToInt32 in JS — silently
- * truncating any value outside the signed-32-bit range (-2^31 to 2^31-1) — while this
- * module already allows any value up to Number.MAX_SAFE_INTEGER (2^53-1, see
- * isEligibleInteger()); a bitwise split would silently corrupt any literal larger than
- * ~2.1 billion. Addition has no such range limit within the safe-integer range, so it's the
- * only arithmetic operator here that's correct for every value this module accepts, not
- * just the small ones a spot-check would happen to catch.
+ * Six independent (operator, operand-construction) strategies for splitting one numeric
+ * value into a two-operand expression that evaluates back to that exact value. Each entry's
+ * `construct(value, random)` returns `[a, b]` (both rendered through toPaddedRadixDigits()
+ * by buildReplacement()) or `null` if this operator isn't a safe/exact choice for this
+ * particular value — buildReplacement() filters to the entries that return non-null before
+ * picking one at random, so an ineligible operator for a given value is simply never chosen
+ * for it rather than producing a wrong result. See each construct() function's own doc
+ * comment for why it's exact and, where relevant, why it's range-restricted.
+ * @type {{ op: string, construct: (value: number, random: () => number) => [number, number] | null }[]}
+ */
+const OPERATOR_STRATEGIES = [
+  { op: '+', construct: constructPlus },
+  { op: '-', construct: constructMinus },
+  { op: '^', construct: constructXor },
+  { op: '|', construct: constructOr },
+  { op: '%', construct: constructMod },
+  { op: '*', construct: constructMul },
+];
+
+/** Upper bound (inclusive) a value must stay within to be split via `^`/`|` — see constructXor()/constructOr()'s own doc comments for why. */
+const INT32_SAFE_MAX = 0x7fffffff;
+
+/**
+ * `a + b === value` for ANY non-negative safe integer — no range restriction, since `+` has
+ * no ToInt32 coercion and stays exact throughout the full safe-integer range. This is the
+ * original (and only) construction from before per-operator variety was added; every other
+ * strategy below is additive to this one, not a replacement for it.
  * @param {number} value
  * @param {() => number} random
  * @returns {[number, number]}
  */
-function splitOperands(value, random) {
+function constructPlus(value, random) {
   const a = Math.floor(random() * (value + 1));
   return [a, value - a];
+}
+
+/**
+ * `a - b === value`: pick `a` somewhat larger than `value` (by a random, bounded amount)
+ * and derive `b = a - value`. Exact for any safe integer as long as `a` itself stays a safe
+ * integer, which the small random addend (capped at 1000) guarantees regardless of how
+ * large `value` already is, right up to MAX_SAFE_INTEGER - 1000.
+ * @param {number} value
+ * @param {() => number} random
+ * @returns {[number, number] | null} null only when `value` is already so close to
+ *   MAX_SAFE_INTEGER that even a +1 addend would overflow — vanishingly rare in practice,
+ *   handled defensively rather than assumed away.
+ */
+function constructMinus(value, random) {
+  const headroom = Number.MAX_SAFE_INTEGER - value;
+  if (headroom < 1) {
+    return null;
+  }
+  const addend = 1 + Math.floor(random() * Math.min(1000, headroom));
+  const a = value + addend;
+  return [a, a - value];
+}
+
+/**
+ * `a ^ b === value`: XOR is self-inverse (`a ^ (value ^ a) === value` always), so this is
+ * exact for any `a`/`value` pair — but ONLY within the range `^` actually operates over.
+ * JS's bitwise operators coerce both operands through ToInt32 before computing, so any
+ * value outside the signed-32-bit range (-2^31 to 2^31-1) gets silently truncated — this bit
+ * this module already hit once (see the module doc comment's own history note) and is why
+ * this construction restricts itself to `value <= INT32_SAFE_MAX` (staying on the positive
+ * side of the sign bit specifically, so there's no ambiguity from `^`'s result being
+ * interpreted as a negative Int32 for a `value` this module otherwise treats as
+ * non-negative).
+ * @param {number} value
+ * @param {() => number} random
+ * @returns {[number, number] | null} null when `value` exceeds INT32_SAFE_MAX.
+ */
+function constructXor(value, random) {
+  if (value > INT32_SAFE_MAX) {
+    return null;
+  }
+  const a = Math.floor(random() * INT32_SAFE_MAX);
+  return [a, value ^ a];
+}
+
+/**
+ * `a | b === value`: unlike XOR, OR is not self-inverse against an arbitrary mask (a random
+ * `a` doesn't uniquely determine a `b` that ORs back to exactly `value` — OR can only ever
+ * SET bits, never clear ones a random `a` might introduce outside `value`'s own bit
+ * pattern). The exact construction instead keeps `b = value` itself (which trivially
+ * satisfies `a | value === value` for any `a` whose bits are a SUBSET of `value`'s bits) and
+ * derives `a = value & randomMask` — masking `value` against a random pattern can only ever
+ * clear bits, never set new ones, so `a`'s bits are guaranteed to already be a subset of
+ * `value`'s. Same 32-bit range restriction as constructXor(), for the identical ToInt32
+ * coercion reason.
+ * @param {number} value
+ * @param {() => number} random
+ * @returns {[number, number] | null} null when `value` exceeds INT32_SAFE_MAX.
+ */
+function constructOr(value, random) {
+  if (value > INT32_SAFE_MAX) {
+    return null;
+  }
+  const mask = Math.floor(random() * (value + 1));
+  const a = value & mask;
+  return [a, value];
+}
+
+/**
+ * `a % b === value`: constructed as `b = value + 1 + random offset` (so `b` is always
+ * strictly greater than `value`, which is what makes `(value + k*b) % b === value` hold for
+ * any non-negative integer `k` — modulo of a sum where one term is an exact multiple of the
+ * divisor just returns the OTHER term, as long as that other term is itself already less
+ * than the divisor) and `a = value + k*b` for a random small `k`. The one real hazard is
+ * `a` overflowing MAX_SAFE_INTEGER for a `value` already close to it — this is computed
+ * defensively: `b`'s random offset and `k`'s range are both capped relative to the
+ * remaining headroom below MAX_SAFE_INTEGER, verified directly (including at `value ===
+ * Number.MAX_SAFE_INTEGER - 1` itself, across many random trials) that `a` never exceeds
+ * the safe-integer range and `a % b` always equals `value` exactly.
+ * @param {number} value
+ * @param {() => number} random
+ * @returns {[number, number] | null} null when there's insufficient headroom below
+ *   MAX_SAFE_INTEGER to construct even one safe `(b, k)` pair.
+ */
+function constructMod(value, random) {
+  const headroom = Number.MAX_SAFE_INTEGER - value;
+  if (headroom < 2) {
+    return null;
+  }
+  const b = value + 1 + Math.floor(random() * Math.max(1, Math.min(1000, headroom - 1)));
+  const maxK = Math.floor(headroom / b);
+  if (maxK < 1) {
+    return null;
+  }
+  const k = 1 + Math.floor(random() * Math.min(1000, maxK));
+  const a = value + k * b;
+  if (!Number.isSafeInteger(a)) {
+    return null;
+  }
+  return [a, b];
+}
+
+/**
+ * `a * b === value`: only clean when `value` has a small-ish factor to split on — `0` and
+ * primes have no non-trivial factorization, so this falls back to the trivial `1 * value`
+ * pair for those (still a syntactically valid multiplication, just not a "real" split).
+ * Searches divisors 2..1000 (this module's numeric literals are protocol opcodes, buffer
+ * sizes, pixel/tick constants, etc. — small integers where a real factor is common; the
+ * 1000 search bound is a pragmatic cutoff, not a correctness requirement, since the 1*value
+ * fallback is always exact regardless).
+ * @param {number} value
+ * @param {() => number} random
+ * @returns {[number, number]} never null — the `1 * value` fallback always applies.
+ */
+function constructMul(value, random) {
+  if (value === 0) {
+    return [0, 0];
+  }
+  const searchLimit = Math.min(1000, value);
+  for (let d = 2; d <= searchLimit; d++) {
+    if (value % d === 0) {
+      return [d, value / d];
+    }
+  }
+  return [1, value];
 }
 
 /**
  * @param {number} value a non-negative safe integer
  * @param {() => number} random
  * @param {boolean} [wrapInParens] default true. When false, emits a SINGLE padded hex/octal
- *   literal token with no `+`-split/parens — required for a numeric PROPERTY KEY position
- *   (see isUnwrappablePropertyKey()), where the grammar demands one literal token, not an
- *   arbitrary expression; a computed key needs `[...]` brackets around an expression, but a
- *   non-computed numeric key like `{5: 1}`'s `5` cannot be `(a+b)` no matter how it's
- *   parenthesized — only the padding transformation applies there, not the split/wrap one.
+ *   literal token with no operator-split/parens — required for a numeric PROPERTY KEY
+ *   position (see isUnwrappablePropertyKey()), where the grammar demands one literal token,
+ *   not an arbitrary expression; a computed key needs `[...]` brackets around an expression,
+ *   but a non-computed numeric key like `{5: 1}`'s `5` cannot be any `(a<op>b)` form no
+ *   matter how it's parenthesized — only the padding transformation applies there, not the
+ *   split/wrap one.
  * @returns {string} a value-preserving replacement — see buildReplacement()'s own doc
- *   comment for the exact composition (radix choice, zero-padding, inert-`+`-expression
- *   wrapping) when `wrapInParens` is true.
+ *   comment for the exact composition (radix choice, zero-padding, inert operator-expression
+ *   wrapping via one of OPERATOR_STRATEGIES) when `wrapInParens` is true.
  */
 function toRandomRadixLiteral(value, random, wrapInParens = true) {
   if (!wrapInParens) {
@@ -120,32 +271,46 @@ function toRandomRadixLiteral(value, random, wrapInParens = true) {
 }
 
 /**
- * Builds the actual replacement text for one eligible numeric literal: splits it into two
- * operands that sum back to the original value (see splitOperands()), picks hex or octal
- * PER OPERAND independently (so a single replacement can legitimately mix bases — e.g.
- * `(0x0000002a+0o000000000017)`), zero-pads each operand's digits, and wraps the pair in a
- * parenthesized `+` expression. The parens are required, not cosmetic: this is a
- * text-splice pass (see the module doc comment) substituting into whatever expression
- * position the original bare literal occupied, and `a+b` un-parenthesized could silently
- * change operator-precedence grouping relative to surrounding code (e.g. inside a larger
- * `*`/`%` expression, or adjacent to a `-` where `a+b-c` vs `(a+b)-c` happen to agree but a
- * different surrounding operator might not) — wrapping in `(...)` makes the replacement's
- * precedence behave exactly like the single literal it replaces, regardless of context. Only
- * called when the caller has already confirmed an arbitrary expression is legal at this
- * position (see toRandomRadixLiteral's `wrapInParens` parameter and
- * isUnwrappablePropertyKey()) — never for a property/method key.
+ * Builds the actual replacement text for one eligible numeric literal: picks ONE of the
+ * OPERATOR_STRATEGIES entries at random, restricted to whichever ones return a non-null
+ * `[a, b]` for this specific `value` (see each construct* function's own doc comment for
+ * why some are range/shape-restricted — `^`/`|` to the 32-bit-safe range, `-`/`%` away from
+ * the extreme top of the safe-integer range), picks hex or octal PER OPERAND independently
+ * (so a single replacement can legitimately mix bases — e.g.
+ * `(0x0000002a+0o000000000017)` or `(0o000000000144^0x0000001c)`), zero-pads each operand's
+ * digits, and wraps the pair in a parenthesized `<op>` expression. The parens are required,
+ * not cosmetic: this is a text-splice pass (see the module doc comment) substituting into
+ * whatever expression position the original bare literal occupied, and an un-parenthesized
+ * `a<op>b` could silently change operator-precedence grouping relative to surrounding code
+ * (a bare `a-b` next to a surrounding `*`, or `a^b` next to a surrounding `&`, can each bind
+ * differently than the single literal they replace) — wrapping in `(...)` makes the
+ * replacement's precedence behave exactly like the literal it replaces, regardless of
+ * context, for every operator here uniformly. `+` is always eligible (see constructPlus()),
+ * so this function always has at least one candidate to pick from and never falls through
+ * with nothing selected. Only called when the caller has already confirmed an arbitrary
+ * expression is legal at this position (see toRandomRadixLiteral's `wrapInParens` parameter
+ * and isUnwrappablePropertyKey()) — never for a property/method key.
  * @param {number} value
  * @param {() => number} random
  * @returns {string}
  */
 function buildReplacement(value, random) {
-  const [a, b] = splitOperands(value, random);
+  /** @type {{ op: string, operands: [number, number] }[]} */
+  const eligible = [];
+  for (const strategy of OPERATOR_STRATEGIES) {
+    const operands = strategy.construct(value, random);
+    if (operands !== null) {
+      eligible.push({ op: strategy.op, operands });
+    }
+  }
+  const { op, operands } = eligible[Math.floor(random() * eligible.length)];
+  const [a, b] = operands;
   const operand = (/** @type {number} */ n) => {
     const isHex = random() < 0.5;
     const prefix = isHex ? '0x' : '0o';
     return prefix + toPaddedRadixDigits(n, isHex);
   };
-  return `(${operand(a)}+${operand(b)})`;
+  return `(${operand(a)}${op}${operand(b)})`;
 }
 
 /**

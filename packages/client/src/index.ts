@@ -1,7 +1,7 @@
 import './styles/global.scss';
 import { createSignal } from 'solid-js';
 import { RejectionReason } from '@starve/protocol';
-import { mountWelcomeOverlay, mountChatBox } from '@starve/ui';
+import { mountWelcomeOverlay, mountChatBox, mountLoadingScreen } from '@starve/ui';
 import { bootstrapClient } from './game/bootstrap/ClientBootstrap';
 
 function requireElement(id: string): HTMLElement {
@@ -25,7 +25,8 @@ const uiRoot: HTMLElement = requireElement('ui-root');
 // itself is never handed to render() directly, so it's never cleared.
 const welcomeRoot = document.createElement('div');
 const chatRoot = document.createElement('div');
-uiRoot.append(welcomeRoot, chatRoot);
+const loadingRoot = document.createElement('div');
+uiRoot.append(welcomeRoot, chatRoot, loadingRoot);
 
 function rejectionMessage(reason: RejectionReason): string {
   switch (reason) {
@@ -42,7 +43,7 @@ function rejectionMessage(reason: RejectionReason): string {
 // camera at its default position) before the player has typed a nickname or a connection
 // has even been attempted. See ClientBootstrap's own doc comment for why start() and
 // connect() are split this way.
-const { gameClient, connect, onSessionChange } = bootstrapClient(appRoot);
+const { gameClient, loadAssets, connect, onSessionChange } = bootstrapClient(appRoot);
 
 // True only once Handshake has assigned this client a player — see ClientBootstrap's
 // onSessionChange doc comment. Drives ChatBox's `enabled` prop so chat can't be opened (and
@@ -73,4 +74,38 @@ function showWelcomeOverlay(error?: string): void {
   });
 }
 
-showWelcomeOverlay();
+// Shown first, before the welcome overlay ever appears — the canvas is already rendering
+// underneath it (see bootstrapClient's own doc comment: local sim/render starts immediately,
+// independent of asset loading), but there's nothing worth looking at yet without player
+// sprite textures loaded. loadAssets() drives these signals directly via onProgress rather
+// than polling — see ClientBootstrap.loadAssets's own doc comment for what it loads and in
+// what order.
+const [loaded, setLoaded] = createSignal(0);
+const [total, setTotal] = createSignal(0);
+const [currentAsset, setCurrentAsset] = createSignal<string | undefined>(undefined);
+const [loadError, setLoadError] = createSignal<string | undefined>(undefined);
+
+const unmountLoadingScreen = mountLoadingScreen(loadingRoot, {
+  loaded,
+  total,
+  current: currentAsset,
+  error: loadError,
+});
+
+loadAssets((progress) => {
+  setLoaded(progress.loaded);
+  setTotal(progress.total);
+  setCurrentAsset(progress.current);
+})
+  .catch((error: unknown) => {
+    // Assets that failed to load leave their PlayerRenderer slot undefined (see
+    // loadGameAssets/PlayerRenderer's own doc comments) rather than crashing the game — this
+    // is surfaced so a developer (or a very unlucky player on a broken connection) notices,
+    // but the welcome overlay still opens once loading has settled either way, since a
+    // missing arm texture isn't a reason to block the whole game from starting.
+    setLoadError(error instanceof Error ? error.message : String(error));
+  })
+  .finally(() => {
+    unmountLoadingScreen();
+    showWelcomeOverlay();
+  });

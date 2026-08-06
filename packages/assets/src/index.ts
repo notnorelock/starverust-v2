@@ -49,3 +49,31 @@ export function spritePartUrl(entityType: string, variant: string, part: string)
   }
   return url;
 }
+
+/** One discovered sprite PNG — see spritePartUrl()'s own doc comment for what entityType/variant/part mean. */
+export interface SpriteAsset {
+  entityType: string;
+  variant: string;
+  part: string;
+  url: string;
+}
+
+/**
+ * Flattens SPRITE_URLS into a list every sprite PNG this package bundles, so a caller (see
+ * @starve/client's asset-loading screen) can enumerate "every sprite that exists" generically
+ * and load them one by one with progress reporting, instead of hardcoding a fixed set of
+ * spritePartUrl() calls that has to be kept in sync by hand every time a new sprite/entity
+ * type/variant is added under src/. Order is not guaranteed to be stable across runs (plain
+ * object key iteration) — callers that want a stable order should sort it themselves.
+ */
+export function listSpriteAssets(): SpriteAsset[] {
+  const assets: SpriteAsset[] = [];
+  for (const [entityType, variants] of Object.entries(SPRITE_URLS)) {
+    for (const [variant, parts] of Object.entries(variants)) {
+      for (const [part, url] of Object.entries(parts)) {
+        assets.push({ entityType, variant, part, url });
+      }
+    }
+  }
+  return assets;
+}

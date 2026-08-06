@@ -1,14 +1,16 @@
 import { Opcode, PROTOCOL_VERSION, encodeHello, type RejectionReason } from '@starve/protocol';
 import { EntityType } from '@starve/shared';
-import { spritePartUrl } from '@starve/assets';
+import { listSpriteAssets } from '@starve/assets';
 import { createClientWorld } from '../world/ClientWorldFactory';
 import { registerPacketHandlers } from './PacketHandlerBindings';
 import { WebGLCanvasProvider } from '../../engine/render/WebGLCanvasProvider';
 import { SpriteRenderer } from '../../engine/render/SpriteRenderer';
 import { ColorQuadRenderer } from '../../engine/render/ColorQuadRenderer';
 import { TextTextureCache } from '../../engine/render/TextTextureCache';
-import { loadTexture } from '../../engine/render/TextureLoader';
 import { EntityRenderer } from '../../engine/render/renderers/EntityRenderer';
+import { loadSequentially, type LoadProgress } from '../../engine/loading/AssetLoader';
+import { textureLoadTasks } from '../../engine/loading/TextureLoadTasks';
+import { fontLoadTasks, type FontAsset } from '../../engine/loading/FontLoader';
 import { Camera2D } from '../../engine/camera/Camera2D';
 import { NetworkClient } from '../../engine/network/NetworkClient';
 import { packetHandlerRegistry } from '../../engine/network/PacketHandlerRegistry';
@@ -29,14 +31,65 @@ import { CANVAS_PROVIDER, CAMERA_SERVICE, NETWORK_CLIENT } from '../core/Service
  */
 const PLAYER_VARIANT: PlayerVariant = 'day';
 
-/** Loads all three player part textures for `variant`, resolving once every part has loaded. */
-async function loadPlayerTextures(gl: WebGL2RenderingContext, variant: PlayerVariant): Promise<PlayerTextures> {
-  const [head, leftArm, rightArm] = await Promise.all([
-    loadTexture(gl, spritePartUrl('player', variant, 'default_head')),
-    loadTexture(gl, spritePartUrl('player', variant, 'default_left_arm')),
-    loadTexture(gl, spritePartUrl('player', variant, 'default_right_arm')),
-  ]);
-  return { head, leftArm, rightArm };
+/**
+ * No custom web fonts exist in this project yet (see CLAUDE.md's "documented insertion
+ * points, not placeholder no-op systems" convention) — everything today uses system font
+ * stacks (see client/src/styles/global.scss). Left empty rather than omitted so the loading
+ * screen's font phase, and fontLoadTasks() itself, are already wired in and start actually
+ * loading/reporting progress the moment a real FontAsset is added here, with no other
+ * changes needed.
+ */
+const FONTS: readonly FontAsset[] = [];
+
+/** part name (see @starve/assets's SpriteAsset) -> which PlayerTextures field it fills. */
+const PLAYER_PART_FIELD: Record<string, keyof PlayerTextures> = {
+  default_head: 'head',
+  default_left_arm: 'leftArm',
+  default_right_arm: 'rightArm',
+};
+
+/**
+ * Loads every asset @starve/assets bundles — every entity type, every variant, not just the
+ * one PlayerVariant currently rendered — plus any declared custom fonts (see FONTS above),
+ * sequentially with progress reporting (see AssetLoader). This is deliberately NOT filtered
+ * down to "only what's currently wired to a renderer": @starve/assets today only has player
+ * sprites, but listSpriteAssets() already auto-discovers whatever's added under its src/ (see
+ * that package's own doc comment) — filtering this loader to a hardcoded entityType/variant
+ * would silently stop loading (and stop showing progress for) any future entity type/variant
+ * added there until someone remembered to update this file too, defeating the whole point of
+ * that auto-discovery. Assets with no current consumer (e.g. the 'night' player variant, or a
+ * future non-player entity type with no renderer yet) still load and report progress — the
+ * loading screen's total legitimately reflects everything @starve/assets contains, not just
+ * what's on screen today — they're just never assigned into `textures` below since nothing
+ * reads a slot for them yet.
+ *
+ * Returns PlayerTextures for the active PLAYER_VARIANT once every task has settled (or
+ * thrown, if any failed — see loadSequentially's AggregateError behavior) so the caller can
+ * start actually showing the game only once assets are ready, instead of drawing untextured/
+ * blank sprites for the first few frames.
+ */
+async function loadGameAssets(
+  gl: WebGL2RenderingContext,
+  activePlayerVariant: PlayerVariant,
+  onProgress: (progress: LoadProgress) => void,
+): Promise<PlayerTextures> {
+  const textures: PlayerTextures = { head: undefined, leftArm: undefined, rightArm: undefined };
+
+  const tasks = [
+    ...textureLoadTasks(gl, listSpriteAssets(), (asset, texture) => {
+      if (asset.entityType !== 'player' || asset.variant !== activePlayerVariant) {
+        return;
+      }
+      const field = PLAYER_PART_FIELD[asset.part];
+      if (field) {
+        textures[field] = texture;
+      }
+    }),
+    ...fontLoadTasks(FONTS),
+  ];
+
+  await loadSequentially(tasks, onProgress);
+  return textures;
 }
 
 function resolveWebSocketUrl(): string {
@@ -46,6 +99,18 @@ function resolveWebSocketUrl(): string {
 
 export interface ClientBootstrap {
   gameClient: GameClient;
+  /**
+   * Loads every game asset (player sprite textures, any declared custom fonts — see
+   * loadGameAssets()) sequentially, invoking `onProgress` after each one settles so a caller
+   * (see client/src/index.ts) can drive a loading screen. Resolves once every asset has been
+   * attempted (whether or not any individual one failed — see loadSequentially's
+   * AggregateError behavior, which this rethrows). Player sprite textures render as soon as
+   * they're loaded regardless of whether this has been called — PlayerRenderer already
+   * tolerates undefined textures for a few frames (see its own doc comment) — this exists
+   * purely to give the loading screen something real to report progress against before the
+   * welcome overlay appears.
+   */
+  loadAssets: (onProgress: (progress: LoadProgress) => void) => Promise<void>;
   /**
    * Opens the WebSocket and sends HelloPacket once it's open, carrying `nickname`.
    * `onRejected` is invoked if the server refuses the connection (protocol version
@@ -107,15 +172,19 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
 
   // Texture loading (see TextureLoader) is inherently async — the images have to actually
   // download/decode before they exist as GPU data — so PlayerRenderer receives a getter
-  // closure rather than a PlayerTextures value it could read before loadPlayerTextures()'s
+  // closure rather than a PlayerTextures value it could read before loadGameAssets()'s
   // promise resolves. It draws nothing for any part still missing (nickname/chat text
   // still draw regardless) until each resolves, rather than bootstrapClient() blocking
   // startup on every texture load finishing first — matching this file's own doc comment
-  // that GameClient.start() runs immediately, before any nickname/connection exists.
+  // that GameClient.start() runs immediately, before any nickname/connection exists. The
+  // caller (see client/src/index.ts) additionally calls the returned loadAssets() to drive a
+  // loading screen, but this mutable binding is what PlayerRenderer's closure actually reads
+  // from every frame regardless of whether/when that's been called.
   let playerTextures: PlayerTextures = { head: undefined, leftArm: undefined, rightArm: undefined };
-  void loadPlayerTextures(canvasProvider.gl, PLAYER_VARIANT).then((textures) => {
-    playerTextures = textures;
-  });
+
+  async function loadAssets(onProgress: (progress: LoadProgress) => void): Promise<void> {
+    playerTextures = await loadGameAssets(canvasProvider.gl, PLAYER_VARIANT, onProgress);
+  }
 
   // One EntityRenderer per EntityType RenderSystem might encounter — see EntityRenderer's
   // own doc comment for why this dispatch-by-type exists instead of one system doing every
@@ -176,5 +245,5 @@ export function bootstrapClient(mountPoint: HTMLElement): ClientBootstrap {
     sessionChangeListeners.push(listener);
   }
 
-  return { gameClient, connect, onSessionChange };
+  return { gameClient, loadAssets, connect, onSessionChange };
 }

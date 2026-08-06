@@ -1,6 +1,7 @@
 import { render } from 'solid-js/web';
 import { WelcomeOverlay, type WelcomeOverlayProps } from './components/WelcomeOverlay';
 import { ChatBox, type ChatBoxProps } from './components/ChatBox';
+import { LoadingScreen, type LoadingScreenProps } from './components/LoadingScreen';
 
 /**
  * Mounts WelcomeOverlay into `container` and returns an unmount function — wraps
@@ -22,4 +23,14 @@ export function mountWelcomeOverlay(container: HTMLElement, props: WelcomeOverla
  */
 export function mountChatBox(container: HTMLElement, props: ChatBoxProps): () => void {
   return render(() => <ChatBox {...props} />, container);
+}
+
+/**
+ * Mounts LoadingScreen into `container` and returns an unmount function — same wrapping
+ * reasoning as mountWelcomeOverlay(). Meant to be mounted once at startup and unmounted as
+ * soon as asset loading finishes, before the welcome overlay ever shows (see
+ * @starve/client's index.ts).
+ */
+export function mountLoadingScreen(container: HTMLElement, props: LoadingScreenProps): () => void {
+  return render(() => <LoadingScreen {...props} />, container);
 }

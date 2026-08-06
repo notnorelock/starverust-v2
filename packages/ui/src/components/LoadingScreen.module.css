@@ -1,0 +1,37 @@
+@reference "../styles/tailwind.css";
+
+.overlay {
+  @apply fixed inset-0 flex items-center justify-center bg-neutral-950/90 backdrop-blur-sm;
+}
+
+.card {
+  @apply flex w-80 flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-xl;
+}
+
+.title {
+  @apply text-2xl font-bold tracking-tight text-neutral-50;
+}
+
+.subtitle {
+  @apply -mt-2 mb-2 text-sm text-neutral-400;
+}
+
+.track {
+  @apply h-2 w-full overflow-hidden rounded-full bg-neutral-800;
+}
+
+.fill {
+  @apply h-full rounded-full bg-emerald-500 transition-[width] duration-150 ease-out;
+}
+
+.status {
+  @apply flex items-center justify-between text-xs text-neutral-400;
+}
+
+.current {
+  @apply overflow-hidden text-ellipsis whitespace-nowrap;
+}
+
+.error {
+  @apply -mb-1 text-sm text-red-400;
+}
