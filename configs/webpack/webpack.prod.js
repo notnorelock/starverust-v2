@@ -14,6 +14,7 @@ const domprops = require('./domprops.cjs');
 const solidDelegatedEvents = require('./solid-delegated-events.cjs');
 const { runObfuscationPrepass } = require('./obfuscate-build.cjs');
 const { escapeStringLiterals } = require('./obfuscate-strings.cjs');
+const { obfuscateNumericLiterals } = require('./obfuscate-numbers.cjs');
 const { GLOBAL_OBJECT_IDENTIFIER } = require('./obfuscate-properties.cjs');
 
 /**
@@ -232,6 +233,39 @@ function createProdConfig(packageRoot) {
                   }
                   const escaped = escapeStringLiterals(source, assetName);
                   compilation.updateAsset(assetName, new compiler.webpack.sources.RawSource(escaped));
+                }
+              },
+            );
+          });
+        },
+      },
+      // Rewrites every eligible non-negative-integer numeric literal's TEXT to a random
+      // hex (0x...) or octal (0o...) equivalent in the final, already-minified bundle — see
+      // obfuscate-numbers.cjs for the full design doc comment. Same architecture and same
+      // "MUST run after Terser" reasoning as EscapeStringLiterals above (Terser's printer
+      // unconditionally re-normalizes numeric literals back to decimal on emit too, verified
+      // directly), hence a second hook at the same PROCESS_ASSETS_STAGE_DEV_TOOLING stage,
+      // registered after EscapeStringLiterals purely for readability — the two passes touch
+      // disjoint AST node kinds (StringLiteral vs NumericLiteral) and don't interact.
+      {
+        apply(/** @type {import('webpack').Compiler} */ compiler) {
+          compiler.hooks.compilation.tap('ObfuscateNumericLiterals', (compilation) => {
+            compilation.hooks.processAssets.tap(
+              {
+                name: 'ObfuscateNumericLiterals',
+                stage: compiler.webpack.Compilation.PROCESS_ASSETS_STAGE_DEV_TOOLING,
+              },
+              (assets) => {
+                for (const assetName of Object.keys(assets)) {
+                  if (!assetName.endsWith('.js')) {
+                    continue;
+                  }
+                  const source = compilation.getAsset(assetName)?.source.source().toString();
+                  if (source === undefined) {
+                    continue;
+                  }
+                  const obfuscated = obfuscateNumericLiterals(source, assetName);
+                  compilation.updateAsset(assetName, new compiler.webpack.sources.RawSource(obfuscated));
                 }
               },
             );

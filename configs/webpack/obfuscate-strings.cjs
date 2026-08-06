@@ -110,7 +110,18 @@ function isModuleSpecifier(node) {
  * @returns {string}
  */
 function escapeStringLiterals(jsText, fileName) {
-  const sourceFile = ts.createSourceFile(fileName, jsText, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
+  // setParentNodes MUST be true — isModuleSpecifier() below reads node.parent, and
+  // ts.createSourceFile leaves .parent undefined on every node unless this flag is set. A
+  // previous version of this function (and obfuscate-numbers.cjs, copied from here) passed
+  // `false`, which made isModuleSpecifier() ALWAYS return false (its first check is `if
+  // (!parent) return false`) — meaning import/export specifier strings were never actually
+  // exempted despite this file's own doc comment claiming they were. In THIS module the
+  // practical blast radius was limited (escaping an already-resolved specifier string is
+  // spec-legal JS, just pointless per the doc comment's own reasoning, not a syntax error),
+  // but the identical bug in obfuscate-numbers.cjs's analogous property-key check DID
+  // produce invalid syntax there, which is how this was caught — see that file's own fix
+  // for the concrete failure.
+  const sourceFile = ts.createSourceFile(fileName, jsText, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 
   /** @type {{ start: number, end: number, replacement: string }[]} */
   const edits = [];
